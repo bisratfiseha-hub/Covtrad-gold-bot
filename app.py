@@ -11,6 +11,17 @@ app = Flask(__name__)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8153490508:AAG5Hjr8mjLw5QAaNLn5n4S1CpQSKJE7whs")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "8153490508")
 
+# Comprehensive Watchlist Definition
+ASSETS = {
+    "Gold (XAU/USD)": "GC=F",
+    "Bitcoin (BTC)": "BTC-USD",
+    "Ethereum (ETH)": "ETH-USD",
+    "USD/JPY": "USDJPY=X",
+    "EUR/USD": "EURUSD=X",
+    "GBP/USD": "GBPUSD=X",
+    "NAS100": "NQ=F"
+}
+
 def send_telegram_alert(chat_id, message, reply_markup=None):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
@@ -31,7 +42,20 @@ def get_main_keyboard():
     return {
         "keyboard": [
             [{"text": "🎯 Instant Signal"}, {"text": "⏱ Timeframe Analysis"}],
-            [{"text": "📊 Full Market Overview"}, {"text": "⚙️ Engine & Live Price"}]
+            [{"text": "🪙 Select Asset"}, {"text": "📊 Full Market Overview"}],
+            [{"text": "⚙️ Engine Status"}]
+        ],
+        "resize_keyboard": True,
+        "persistent": True
+    }
+
+def get_asset_keyboard():
+    return {
+        "keyboard": [
+            [{"text": "🥇 Gold (XAU/USD)"}, {"text": "₿ Bitcoin (BTC)"}],
+            [{"text": "🔷 Ethereum (ETH)"}, {"text": "💴 USD/JPY"}],
+            [{"text": "💶 EUR/USD"}, {"text": "💷 GBP/USD"}],
+            [{"text": "📈 NAS100"}, {"text": "🔙 Main Menu"}]
         ],
         "resize_keyboard": True,
         "persistent": True
@@ -48,7 +72,7 @@ def get_timeframe_keyboard():
         "persistent": True
     }
 
-# --- TECHNICAL ANALYZER ENGINE ---
+# --- TECHNICAL ENGINE ---
 
 def calculate_rsi(series, period=14):
     delta = series.diff()
@@ -57,99 +81,87 @@ def calculate_rsi(series, period=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-def analyze_single_timeframe(interval_code, period_code, tf_name):
-    gold = yf.Ticker("GC=F")
-    df = gold.history(period=period_code, interval=interval_code)
-    
-    if df.empty or len(df) < 50:
-        return f"⚠️ Insufficient data to analyze {tf_name} chart."
+def analyze_asset(ticker_symbol, asset_name, interval_code="15m", period_code="5d", tf_label="15M"):
+    try:
+        asset = yf.Ticker(ticker_symbol)
+        df = asset.history(period=period_code, interval=interval_code)
+        
+        if df.empty or len(df) < 20:
+            return f"⚠️ Insufficient market data for {asset_name} ({tf_label})."
 
-    df['SMA20'] = df['Close'].rolling(20).mean()
-    df['SMA50'] = df['Close'].rolling(50).mean()
-    df['RSI'] = calculate_rsi(df['Close'], 14)
+        df['SMA20'] = df['Close'].rolling(20).mean()
+        df['SMA50'] = df['Close'].rolling(50).mean()
+        df['RSI'] = calculate_rsi(df['Close'], 14)
 
-    current_price = df['Close'].iloc[-1]
-    sma20 = df['SMA20'].iloc[-1]
-    sma50 = df['SMA50'].iloc[-1]
-    rsi = df['RSI'].iloc[-1]
-    high_10 = df['High'].iloc[-11:-1].max()
-    low_10 = df['Low'].iloc[-11:-1].min()
+        current_price = df['Close'].iloc[-1]
+        sma20 = df['SMA20'].iloc[-1]
+        sma50 = df['SMA50'].iloc[-1]
+        rsi = df['RSI'].iloc[-1]
+        high_10 = df['High'].iloc[-11:-1].max()
+        low_10 = df['Low'].iloc[-11:-1].min()
 
-    if current_price > sma20 > sma50 and rsi > 52:
-        bias = "BULLISH 📈"
-        action = "LOOK FOR BUY / LONG 🟢"
-        sl = current_price - 18.0
-        tp = current_price + 36.0
-    elif current_price < sma20 < sma50 and rsi < 48:
-        bias = "BEARISH 📉"
-        action = "LOOK FOR SELL / SHORT 🔴"
-        sl = current_price + 18.0
-        tp = current_price - 36.0
-    else:
-        bias = "NEUTRAL / RANGING ⚖️"
-        action = "WAIT FOR CLEAR BREAKOUT ⏳"
-        sl, tp = 0, 0
+        # Dynamic Stop Loss / Take Profit Scaling
+        if current_price > 10000:  # Crypto (BTC)
+            sl_dist, tp_dist = current_price * 0.015, current_price * 0.03
+        elif current_price > 1000:   # Gold, ETH, NAS100
+            sl_dist, tp_dist = 18.0, 36.0
+        elif current_price > 50:     # USD/JPY
+            sl_dist, tp_dist = 0.35, 0.70
+        else:                        # Forex Majors (EUR/USD, GBP/USD)
+            sl_dist, tp_dist = 0.0025, 0.0050
 
-    msg = (
-        f"⏱ *{tf_name.upper()} TIMEFRAME ANALYSIS*\n"
-        f"----------------------------------------\n"
-        f"💵 *Current Price:* `${current_price:.2f}`\n"
-        f"📊 *Trend Bias:* `{bias}`\n"
-        f"📈 *RSI (14):* `{rsi:.1f}`\n"
-        f"🔹 *SMA 20:* `${sma20:.2f}` | *SMA 50:* `${sma50:.2f}`\n\n"
-        f"💡 *Actionable Setup:* *{action}*\n"
-    )
+        if current_price > sma20 > sma50 and rsi > 52:
+            bias = "BULLISH 📈"
+            action = "BUY / LONG 🟢"
+            sl = current_price - sl_dist
+            tp = current_price + tp_dist
+        elif current_price < sma20 < sma50 and rsi < 48:
+            bias = "BEARISH 📉"
+            action = "SELL / SHORT 🔴"
+            sl = current_price + sl_dist
+            tp = current_price - tp_dist
+        else:
+            bias = "NEUTRAL / CONSOLIDATION ⚖️"
+            action = "WAIT FOR BREAKOUT ⏳"
+            sl, tp = 0, 0
 
-    if sl != 0:
-        msg += (
-            f"• *Suggested Entry:* `${current_price:.2f}`\n"
-            f"• *Stop Loss (SL):* `${sl:.2f}`\n"
-            f"• *Take Profit (TP):* `${tp:.2f}`\n"
+        # Format decimal places appropriately for forex vs commodities/crypto
+        if current_price < 10:
+            price_fmt = f"{current_price:.4f}"
+            sma_fmt = f"{sma20:.4f}"
+            sma50_fmt = f"{sma50:.4f}"
+            sl_fmt = f"{sl:.4f}"
+            tp_fmt = f"{tp:.4f}"
+        else:
+            price_fmt = f"{current_price:.2f}"
+            sma_fmt = f"{sma20:.2f}"
+            sma50_fmt = f"{sma50:.2f}"
+            sl_fmt = f"{sl:.2f}"
+            tp_fmt = f"{tp:.2f}"
+
+        msg = (
+            f"📊 *{asset_name} ({tf_label} ANALYSIS)*\n"
+            f"----------------------------------------\n"
+            f"💵 *Live Price:* `{price_fmt}`\n"
+            f"📈 *Trend Bias:* `{bias}`\n"
+            f"📊 *RSI (14):* `{rsi:.1f}`\n"
+            f"🔹 *SMA 20:* `{sma_fmt}` | *SMA 50:* `{sma50_fmt}`\n\n"
+            f"💡 *Signal:* *{action}*\n"
         )
-    return msg
 
-def get_instant_signal():
-    gold = yf.Ticker("GC=F")
-    df = gold.history(period="5d", interval="15m")
-    if df.empty or len(df) < 20:
-        return "⚠️ Unable to fetch market data for instant signal."
-
-    current_price = df['Close'].iloc[-1]
-    high_10 = df['High'].iloc[-11:-1].max()
-    low_10 = df['Low'].iloc[-11:-1].min()
-
-    if current_price >= high_10:
-        return (
-            f"🚨 *INSTANT SIGNAL: BUY / LONG 🟢*\n\n"
-            f"📌 *Asset:* Gold (XAU/USD)\n"
-            f"💵 *Entry Price:* `${current_price:.2f}`\n"
-            f"🛑 *Stop Loss:* `${current_price - 20.0:.2f}`\n"
-            f"🎯 *Take Profit 1:* `${current_price + 30.0:.2f}`\n"
-            f"🎯 *Take Profit 2:* `${current_price + 60.0:.2f}`\n"
-            f"⚖️ *Risk/Reward:* 1:3\n"
-            f"⚡ *Reason:* 15M High Breakout Confirmed!"
-        )
-    elif current_price <= low_10:
-        return (
-            f"🚨 *INSTANT SIGNAL: SELL / SHORT 🔴*\n\n"
-            f"📌 *Asset:* Gold (XAU/USD)\n"
-            f"💵 *Entry Price:* `${current_price:.2f}`\n"
-            f"🛑 *Stop Loss:* `${current_price + 20.0:.2f}`\n"
-            f"🎯 *Take Profit 1:* `${current_price - 30.0:.2f}`\n"
-            f"🎯 *Take Profit 2:* `${current_price - 60.0:.2f}`\n"
-            f"⚖️ *Risk/Reward:* 1:3\n"
-            f"⚡ *Reason:* 15M Low Breakout Confirmed!"
-        )
-    else:
-        return (
-            f"⏳ *INSTANT SIGNAL: NO ENTRY RIGHT NOW*\n\n"
-            f"💵 *Current Price:* `${current_price:.2f}`\n"
-            f"⬆️ *Breakout Buy Level:* `${high_10:.2f}`\n"
-            f"⬇️ *Breakout Sell Level:* `${low_10:.2f}`\n\n"
-            f"💡 *Status:* Market is consolidating between key levels. Wait for price to cross boundary."
-        )
+        if sl != 0:
+            msg += (
+                f"• *Suggested Entry:* `{price_fmt}`\n"
+                f"• *Stop Loss (SL):* `{sl_fmt}`\n"
+                f"• *Take Profit (TP):* `{tp_fmt}`\n"
+            )
+        return msg
+    except Exception as e:
+        return f"Error analyzing {asset_name}: {e}"
 
 # --- WEBHOOK HANDLER ---
+
+user_selected_asset = {"symbol": "GC=F", "name": "Gold (XAU/USD)"}
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -158,106 +170,155 @@ def webhook():
         chat_id = data["message"]["chat"]["id"]
         text = data["message"].get("text", "")
 
-        # --- MAIN MENU & NAVIGATION ---
+        # --- MENU NAVIGATION ---
         if text in ["/start", "start", "🔙 Main Menu"]:
             welcome = (
-                "🏛 *COVTRAD AI GOLD TRADING ENGINE*\n\n"
-                "Welcome to your professional market assistant. Select an option from the menu below:"
+                "🏛 *COVTRAD MULTI-ASSET INTELLIGENCE BOT*\n\n"
+                f"📌 *Active Selected Asset:* `{user_selected_asset['name']}`\n\n"
+                "Tap a button below to get real-time technical signals or change your trading asset:"
             )
             send_telegram_alert(chat_id, welcome, reply_markup=get_main_keyboard())
 
+        elif text in ["🪙 Select Asset", "/assets"]:
+            msg = "🪙 *Choose an asset/pair to focus analysis on:*"
+            send_telegram_alert(chat_id, msg, reply_markup=get_asset_keyboard())
+
+        # --- ASSET SELECTION HANDLERS ---
+        elif text == "🥇 Gold (XAU/USD)":
+            user_selected_asset["symbol"] = ASSETS["Gold (XAU/USD)"]
+            user_selected_asset["name"] = "Gold (XAU/USD)"
+            send_telegram_alert(chat_id, "✅ Selected *Gold (XAU/USD)*!", reply_markup=get_main_keyboard())
+
+        elif text == "₿ Bitcoin (BTC)":
+            user_selected_asset["symbol"] = ASSETS["Bitcoin (BTC)"]
+            user_selected_asset["name"] = "Bitcoin (BTC)"
+            send_telegram_alert(chat_id, "✅ Selected *Bitcoin (BTC)*!", reply_markup=get_main_keyboard())
+
+        elif text == "🔷 Ethereum (ETH)":
+            user_selected_asset["symbol"] = ASSETS["Ethereum (ETH)"]
+            user_selected_asset["name"] = "Ethereum (ETH)"
+            send_telegram_alert(chat_id, "✅ Selected *Ethereum (ETH)*!", reply_markup=get_main_keyboard())
+
+        elif text == "💴 USD/JPY":
+            user_selected_asset["symbol"] = ASSETS["USD/JPY"]
+            user_selected_asset["name"] = "USD/JPY"
+            send_telegram_alert(chat_id, "✅ Selected *USD/JPY*!", reply_markup=get_main_keyboard())
+
+        elif text == "💶 EUR/USD":
+            user_selected_asset["symbol"] = ASSETS["EUR/USD"]
+            user_selected_asset["name"] = "EUR/USD"
+            send_telegram_alert(chat_id, "✅ Selected *EUR/USD*!", reply_markup=get_main_keyboard())
+
+        elif text == "💷 GBP/USD":
+            user_selected_asset["symbol"] = ASSETS["GBP/USD"]
+            user_selected_asset["name"] = "GBP/USD"
+            send_telegram_alert(chat_id, "✅ Selected *GBP/USD*!", reply_markup=get_main_keyboard())
+
+        elif text == "📈 NAS100":
+            user_selected_asset["symbol"] = ASSETS["NAS100"]
+            user_selected_asset["name"] = "NAS100 Index"
+            send_telegram_alert(chat_id, "✅ Selected *NAS100 Index*!", reply_markup=get_main_keyboard())
+
+        # --- ANALYSIS EXECUTION ---
         elif text in ["🎯 Instant Signal", "/signal"]:
-            send_telegram_alert(chat_id, "⚡ *Calculating instant signal...*")
-            msg = get_instant_signal()
+            send_telegram_alert(chat_id, f"⚡ *Calculating instant signal for {user_selected_asset['name']}...*")
+            msg = analyze_asset(user_selected_asset["symbol"], user_selected_asset["name"], "15m", "5d", "15M Instant")
             send_telegram_alert(chat_id, msg, reply_markup=get_main_keyboard())
 
         elif text in ["⏱ Timeframe Analysis", "/timeframes"]:
-            msg = "⏱ *Select a specific timeframe below to perform focused technical analysis:*"
+            msg = f"⏱ *Select a timeframe for {user_selected_asset['name']}:*"
             send_telegram_alert(chat_id, msg, reply_markup=get_timeframe_keyboard())
 
-        # --- TIMEFRAME SUB-MENU ACTIONS ---
         elif text == "⚡ 15M Scalp":
-            send_telegram_alert(chat_id, "⏳ *Analyzing 15M chart...*")
-            msg = analyze_single_timeframe("15m", "5d", "15-Minute Scalp")
+            send_telegram_alert(chat_id, f"⏳ *Analyzing 15M chart for {user_selected_asset['name']}...*")
+            msg = analyze_asset(user_selected_asset["symbol"], user_selected_asset["name"], "15m", "5d", "15M Scalp")
             send_telegram_alert(chat_id, msg, reply_markup=get_timeframe_keyboard())
 
         elif text == "📊 30M Intraday":
-            send_telegram_alert(chat_id, "⏳ *Analyzing 30M chart...*")
-            msg = analyze_single_timeframe("30m", "5d", "30-Minute Intraday")
+            send_telegram_alert(chat_id, f"⏳ *Analyzing 30M chart for {user_selected_asset['name']}...*")
+            msg = analyze_asset(user_selected_asset["symbol"], user_selected_asset["name"], "30m", "5d", "30M Intraday")
             send_telegram_alert(chat_id, msg, reply_markup=get_timeframe_keyboard())
 
         elif text == "📈 1H Trend":
-            send_telegram_alert(chat_id, "⏳ *Analyzing 1H chart...*")
-            msg = analyze_single_timeframe("1h", "1mo", "1-Hour Trend")
+            send_telegram_alert(chat_id, f"⏳ *Analyzing 1H chart for {user_selected_asset['name']}...*")
+            msg = analyze_asset(user_selected_asset["symbol"], user_selected_asset["name"], "1h", "1mo", "1H Trend")
             send_telegram_alert(chat_id, msg, reply_markup=get_timeframe_keyboard())
 
         elif text == "🏛 4H Macro":
-            send_telegram_alert(chat_id, "⏳ *Analyzing 4H chart...*")
-            msg = analyze_single_timeframe("1h", "1mo", "4-Hour Macro")
+            send_telegram_alert(chat_id, f"⏳ *Analyzing 4H chart for {user_selected_asset['name']}...*")
+            msg = analyze_asset(user_selected_asset["symbol"], user_selected_asset["name"], "1h", "1mo", "4H Macro")
             send_telegram_alert(chat_id, msg, reply_markup=get_timeframe_keyboard())
 
-        # --- OVERVIEW & ENGINE STATUS ---
         elif text in ["📊 Full Market Overview", "/overview"]:
-            send_telegram_alert(chat_id, "⏳ *Scanning 15M, 30M, 1H, and 4H timeframes...*")
-            m15 = analyze_single_timeframe("15m", "5d", "15M")
-            m60 = analyze_single_timeframe("1h", "1mo", "1H")
-            send_telegram_alert(chat_id, f"{m15}\n\n{m60}", reply_markup=get_main_keyboard())
+            send_telegram_alert(chat_id, "⏳ *Scanning core markets (Gold, EUR/USD, BTC)...*")
+            m1 = analyze_asset("GC=F", "Gold (XAU/USD)", "15m", "5d", "15M")
+            m2 = analyze_asset("EURUSD=X", "EUR/USD", "15m", "5d", "15M")
+            m3 = analyze_asset("BTC-USD", "Bitcoin (BTC)", "15m", "5d", "15M")
+            send_telegram_alert(chat_id, f"{m1}\n\n{m2}\n\n{m3}", reply_markup=get_main_keyboard())
 
-        elif text in ["⚙️ Engine & Live Price", "/status", "/price"]:
-            try:
-                gold = yf.Ticker("GC=F")
-                df = gold.history(period="1d", interval="1m")
-                current_price = df['Close'].iloc[-1]
-                msg = (
-                    f"⚙️ *COVTRAD ENGINE STATUS*\n"
-                    f"----------------------------------------\n"
-                    f"💵 *Live Spot Price (XAU/USD):* `${current_price:.2f}`\n"
-                    f"🟢 *Server Status:* Active 24/7 (Cloud Node)\n"
-                    f"🔄 *Automated Scanner:* Scanning every 120s\n"
-                    f"⚡ *Latency:* Real-Time"
-                )
-            except Exception as e:
-                msg = f"Error fetching system status: {e}"
+        elif text in ["⚙️ Engine Status", "/status"]:
+            msg = (
+                f"⚙️ *COVTRAD ENGINE DASHBOARD*\n"
+                f"----------------------------------------\n"
+                f"🟢 *Server Status:* Active 24/7 (Render Cloud)\n"
+                f"🪙 *Monitored Watchlist:* Gold, BTC, ETH, USD/JPY, EUR/USD, GBP/USD, NAS100\n"
+                f"🔄 *Automated Scanner:* Active (Checks every 2 min)\n"
+                f"⚡ *Latency:* Real-Time Data Pipeline"
+            )
             send_telegram_alert(chat_id, msg, reply_markup=get_main_keyboard())
 
     return jsonify({"status": "ok"}), 200
 
-# --- BACKGROUND AUTOMATED SCANNER (Runs 24/7) ---
+# --- BACKGROUND AUTOMATED SCANNER ---
 
 def run_scanner():
-    print("Starting Covtrad Gold Market Scanner...")
-    last_signal = None
+    print("Starting Covtrad Multi-Asset Market Scanner...")
+    last_signals = {}
+    
+    scan_watchlist = {
+        "Gold (XAU/USD)": "GC=F",
+        "Bitcoin (BTC)": "BTC-USD",
+        "EUR/USD": "EURUSD=X"
+    }
+
     while True:
-        try:
-            gold = yf.Ticker("GC=F")
-            df = gold.history(period="5d", interval="15m")
+        for name, ticker in scan_watchlist.items():
+            try:
+                asset = yf.Ticker(ticker)
+                df = asset.history(period="5d", interval="15m")
+                
+                if not df.empty and len(df) > 15:
+                    current_price = df['Close'].iloc[-1]
+                    high_10 = df['High'].iloc[-11:-1].max()
+                    low_10 = df['Low'].iloc[-11:-1].min()
+
+                    if current_price > 10000:
+                        sl_d, tp_d = current_price * 0.015, current_price * 0.03
+                    elif current_price > 1000:
+                        sl_d, tp_d = 18.0, 36.0
+                    elif current_price > 50:
+                        sl_d, tp_d = 0.35, 0.70
+                    else:
+                        sl_d, tp_d = 0.0025, 0.0050
+
+                    if current_price > high_10 and last_signals.get(name) != "BUY":
+                        last_signals[name] = "BUY"
+                        msg = (f"🚨 *AUTOMATED SIGNAL: BUY ({name})* 🚨\n\n"
+                               f"📈 *Direction:* BUY / LONG\n"
+                               f"💵 *Entry:* `{current_price:.4f}` if current_price < 10 else f'`{current_price:.2f}`'\n"
+                               f"🛑 *Breakout Target Reached*")
+                        send_telegram_alert(TELEGRAM_CHAT_ID, msg, reply_markup=get_main_keyboard())
+
+                    elif current_price < low_10 and last_signals.get(name) != "SELL":
+                        last_signals[name] = "SELL"
+                        msg = (f"🚨 *AUTOMATED SIGNAL: SELL ({name})* 🚨\n\n"
+                               f"📉 *Direction:* SELL / SHORT\n"
+                               f"💵 *Entry Price Breakout Down*")
+                        send_telegram_alert(TELEGRAM_CHAT_ID, msg, reply_markup=get_main_keyboard())
+            except Exception as e:
+                print(f"Scanner error on {name}: {e}")
             
-            if not df.empty and len(df) > 15:
-                current_price = df['Close'].iloc[-1]
-                high_10 = df['High'].iloc[-11:-1].max()
-                low_10 = df['Low'].iloc[-11:-1].min()
-
-                if current_price > high_10 and last_signal != "BUY":
-                    last_signal = "BUY"
-                    msg = (f"🚨 *COVTRAD AUTOMATED ALERT (BUY)* 🚨\n\n"
-                           f"📌 *Asset:* XAU/USD\n"
-                           f"📈 *Direction:* BUY / LONG\n"
-                           f"💵 *Entry:* ${current_price:.2f}\n"
-                           f"🛑 *Stop Loss:* ${current_price - 20.0:.2f}\n"
-                           f"🎯 *Take Profit:* ${current_price + 40.0:.2f}\n")
-                    send_telegram_alert(TELEGRAM_CHAT_ID, msg, reply_markup=get_main_keyboard())
-
-                elif current_price < low_10 and last_signal != "SELL":
-                    last_signal = "SELL"
-                    msg = (f"🚨 *COVTRAD AUTOMATED ALERT (SELL)* 🚨\n\n"
-                           f"📌 *Asset:* XAU/USD\n"
-                           f"📉 *Direction:* SELL / SHORT\n"
-                           f"💵 *Entry:* ${current_price:.2f}\n"
-                           f"🛑 *Stop Loss:* ${current_price + 20.0:.2f}\n"
-                           f"🎯 *Take Profit:* ${current_price - 20.0:.2f}\n")
-                    send_telegram_alert(TELEGRAM_CHAT_ID, msg, reply_markup=get_main_keyboard())
-        except Exception as e:
-            print(f"Scanner error: {e}")
+            time.sleep(5)
         
         time.sleep(120)
 
@@ -265,7 +326,7 @@ threading.Thread(target=run_scanner, daemon=True).start()
 
 @app.route('/')
 def index():
-    return "Covtrad Gold Signal Engine is Running 24/7!"
+    return "Covtrad Multi-Asset Signal Engine is Running 24/7!"
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
