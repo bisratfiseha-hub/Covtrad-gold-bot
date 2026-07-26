@@ -27,8 +27,15 @@ try:
 except Exception as e:
     print(f"Webhook reset notice: {e}")
 
-# Global Memory State to track active signals per asset and prevent duplicate spam
+# Global Memory State & Live Cache
 LAST_SIGNALS = {
+    "XAU/USD": None,
+    "BTC/USD": None,
+    "EUR/USD": None
+}
+
+# Live cache populated by the background scanner
+LIVE_MARKET_CACHE = {
     "XAU/USD": None,
     "BTC/USD": None,
     "EUR/USD": None
@@ -141,7 +148,7 @@ ASSET_SPECS = {
     }
 }
 
-# --- HIGH-SPEED TECHNICAL ANALYSIS ENGINE ---
+# --- TECHNICAL ANALYSIS ENGINE ---
 
 def calculate_sma(prices, period):
     if len(prices) < period:
@@ -151,7 +158,7 @@ def calculate_sma(prices, period):
 def calculate_rsi(prices, period=14):
     if len(prices) < period + 1:
         return 50.0
-    p = prices[::-1]  # Oldest to newest
+    p = prices[::-1]
     gains = []
     losses = []
     for i in range(1, len(p)):
@@ -178,6 +185,7 @@ def fetch_tf_data(symbol, interval):
         url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize=60&apikey={TWELVE_DATA_KEY}"
         res = requests.get(url, timeout=5).json()
         if 'values' not in res:
+            print(f"API Limit/Error for {symbol}: {res.get('message', 'No values')}")
             return None
         closes = [float(item['close']) for item in res['values']]
         
@@ -192,6 +200,7 @@ def fetch_tf_data(symbol, interval):
 
 def fetch_asset_analysis(symbol):
     htf_data = fetch_tf_data(symbol, "4h")
+    time.sleep(1.5)  # Throttle to prevent 429 rate limit errors
     ltf_data = fetch_tf_data(symbol, "15min")
 
     if not htf_data or not ltf_data:
@@ -209,7 +218,6 @@ def generate_multi_timeframe_signal(symbol):
     htf = data['htf']
     ltf = data['ltf']
 
-    # 4H Macro Classification
     if 45.0 <= htf['rsi'] <= 55.0 or abs(htf['sma20'] - htf['sma50']) / price < 0.0005:
         htf_bias = "RANGING / SIDEWAYS 🟡"
     elif htf['sma20'] > htf['sma50']:
@@ -217,11 +225,9 @@ def generate_multi_timeframe_signal(symbol):
     else:
         htf_bias = "BEARISH 🔴"
 
-    # 15M Micro Signals
     ltf_bullish = ltf['sma20'] > ltf['sma50'] and ltf['rsi'] > 50
     ltf_bearish = ltf['sma20'] < ltf['sma50'] and ltf['rsi'] < 50
 
-    # Multi-Timeframe Strategy Matrix
     if "BULLISH" in htf_bias and ltf_bullish:
         trade_type = "TREND CONTINUATION 🚀"
         signal = "BUY / LONG 🟢"
@@ -294,22 +300,26 @@ def generate_multi_timeframe_signal(symbol):
         "spec": spec
     }
 
-# --- ⚡ INSTANT 60-SECOND PUSH NOTIFICATION SCANNER ENGINE ---
+# --- ⚡ SCANNER ENGINE WITH SMART CACHING ---
 
 def live_market_scanner_loop():
-    print("⚡ Instant 60-second market scanner engine active!")
+    print("⚡ Instant market scanner loop initialized!")
     while True:
         try:
             for symbol in ASSET_SPECS.keys():
                 sig = generate_multi_timeframe_signal(symbol)
                 
+                # Store fresh analysis in memory cache
+                if sig:
+                    LIVE_MARKET_CACHE[symbol] = sig
+
                 if not sig or sig.get('is_sideways'):
                     LAST_SIGNALS[symbol] = "SIDEWAYS"
+                    time.sleep(2)
                     continue
 
                 signal_key = f"{sig['signal']}_{sig['trade_type']}"
 
-                # PUSH INSTANT ALERT ONLY IF SIGNAL IS NEW OR CHANGED
                 if LAST_SIGNALS.get(symbol) != signal_key:
                     LAST_SIGNALS[symbol] = signal_key
                     active_users = get_all_active_chat_ids()
@@ -331,7 +341,7 @@ def live_market_scanner_loop():
                             f"• **Entry:** {sig['price']:,.{spec['decimals']}f}\n"
                             f"• **Stop Loss (SL):** {sig['sl_price']:,.{spec['decimals']}f} ({pips_sl} {spec['unit']})\n"
                             f"• **Take Profit (TP):** {sig['tp_price']:,.{spec['decimals']}f} ({pips_tp} {spec['unit']})\n\n"
-                            f"⚡ *Fresh market setup formed live! Tap below for cent lot size:* "
+                            f"⚡ *Fresh market setup formed live! Tap below for lot size:* "
                         )
 
                         markup = InlineKeyboardMarkup(row_width=3)
@@ -345,8 +355,10 @@ def live_market_scanner_loop():
                         except Exception as send_err:
                             print(f"Failed to push alert to {chat_id}: {send_err}")
 
+                time.sleep(2)  # Pause between assets to stay within rate limits
+
         except Exception as e:
-            print(f"Live Scanner Loop Notice: {e}")
+            print(f"Scanner Loop Error: {e}")
 
         time.sleep(60)
 
@@ -356,10 +368,10 @@ def live_market_scanner_loop():
 def send_welcome(message):
     current_bal = get_user_balance(message.chat.id)
     msg = (
-        "🎯 **Sniper Trading Dashboard Active (Instant 60s Scan Mode)!**\n\n"
-        f"💰 **Active Account Capital:** `${current_bal:,.2f} USD`\n"
-        "⚡ **Live Engine Status:** Scanning 24/7 for instant push alerts.\n\n"
-        "Tap any market button below to analyze live charts, or type your balance directly (e.g. `57.59`)."
+        "🎯 **Sniper Trading Dashboard Active (Instant Scan Mode)!**\n\n"
+        f"💰 **Active Capital:** `${current_bal:,.2f} USD`\n"
+        "⚡ **Scanner Status:** Hunting continuously for instant push alerts.\n\n"
+        "Tap any market button below for analysis, or type your balance directly (e.g. `57.59`)."
     )
     bot.send_message(message.chat.id, msg, reply_markup=get_main_dashboard(), parse_mode="Markdown")
 
@@ -367,9 +379,15 @@ def process_signal_request(message, symbol):
     bot.send_chat_action(message.chat.id, 'typing')
     active_balance = get_user_balance(message.chat.id)
 
-    sig = generate_multi_timeframe_signal(symbol)
+    # Fast cache lookup: avoid making new API requests if scanner already fetched it
+    sig = LIVE_MARKET_CACHE.get(symbol)
     if not sig:
-        bot.send_message(message.chat.id, f"⚠️ Unable to fetch market data for {symbol} right now.", reply_markup=get_main_dashboard())
+        sig = generate_multi_timeframe_signal(symbol)
+        if sig:
+            LIVE_MARKET_CACHE[symbol] = sig
+
+    if not sig:
+        bot.send_message(message.chat.id, f"⚠️ Fetching market data for {symbol}. Please try again in a few seconds.", reply_markup=get_main_dashboard())
         return
 
     if sig.get('is_sideways'):
@@ -430,7 +448,7 @@ def handle_bot_info(message):
     info_text = (
         "🤖 **Sniper Assistant (Cent Engine)**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        "• **Supported Cent Pairs:** XAUUSDc, BTCUSDc, EURUSDc\n"
+        "• **Supported Pairs:** XAUUSDc, BTCUSDc, EURUSDc\n"
         "• **Live Scanner:** 60-second continuous background loop ⚡\n"
         "• **Risk Modes:** 0.25% (Low), 1.0% (Standard), 5.0% (High Exposure)\n"
         f"• **Active Balance:** ${current_bal:,.2f} USD\n"
@@ -480,7 +498,6 @@ def handle_lot_calculation(call):
         risk_dollars = active_balance * (risk_pct / 100.0)
         reward_dollars = risk_dollars * (tp_dist / sl_dist)
         
-        # Precise Cent Lot Formula
         cent_lot_size = risk_dollars / (sl_dist * spec['contract_size'])
         pips_tp = int(tp_dist * spec['pip_factor'])
 
@@ -513,16 +530,13 @@ def home():
     return "Sniper Bot Engine is active and hunting live!"
 
 if __name__ == "__main__":
-    # 1. Start Telegram Polling Thread
     bot_thread = threading.Thread(target=run_bot)
     bot_thread.daemon = True
     bot_thread.start()
 
-    # 2. Start 60-Second Instant Scanner Thread
     scanner_thread = threading.Thread(target=live_market_scanner_loop)
     scanner_thread.daemon = True
     scanner_thread.start()
     
-    # 3. Start Web Server
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
