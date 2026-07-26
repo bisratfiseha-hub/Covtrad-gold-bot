@@ -1,4 +1,5 @@
 import os
+import time
 import sqlite3
 import threading
 import requests
@@ -25,6 +26,13 @@ try:
     print("Old webhook cleared successfully!")
 except Exception as e:
     print(f"Webhook reset notice: {e}")
+
+# Global Memory State to track active signals per asset and prevent duplicate spam
+LAST_SIGNALS = {
+    "XAU/USD": None,
+    "BTC/USD": None,
+    "EUR/USD": None
+}
 
 # --- DATABASE PERSISTENCE (SQLite) ---
 
@@ -66,6 +74,18 @@ def set_user_balance(chat_id, balance):
     except Exception as e:
         print(f"DB Write Error: {e}")
 
+def get_all_active_chat_ids():
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("SELECT chat_id FROM user_balances")
+        rows = cursor.fetchall()
+        conn.close()
+        return [r[0] for r in rows]
+    except Exception as e:
+        print(f"Error fetching users: {e}")
+        return []
+
 init_db()
 
 # --- DASHBOARD KEYBOARDS ---
@@ -100,7 +120,6 @@ def parse_raw_amount(text):
         return None
 
 # --- ASSET SPECS FOR CENT ACCOUNTS ---
-# contract_size represents price impact per 1.00 Cent Lot in USD
 ASSET_SPECS = {
     "XAU/USD": {
         "name": "GOLD CENT (XAUUSDc)",
@@ -122,43 +141,63 @@ ASSET_SPECS = {
     }
 }
 
-# --- TECHNICAL ANALYSIS ENGINE ---
+# --- HIGH-SPEED TECHNICAL ANALYSIS ENGINE ---
+
+def calculate_sma(prices, period):
+    if len(prices) < period:
+        return None
+    return sum(prices[:period]) / period
+
+def calculate_rsi(prices, period=14):
+    if len(prices) < period + 1:
+        return 50.0
+    p = prices[::-1]  # Oldest to newest
+    gains = []
+    losses = []
+    for i in range(1, len(p)):
+        change = p[i] - p[i-1]
+        gains.append(max(change, 0.0))
+        losses.append(max(-change, 0.0))
+    
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+    
+    for i in range(period, len(gains)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+        
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return 100.0 - (100.0 / (1.0 + rs))
 
 def fetch_tf_data(symbol, interval):
     if not TWELVE_DATA_KEY:
         return None
     try:
-        rsi_url = f"https://api.twelvedata.com/rsi?symbol={symbol}&interval={interval}&time_period=14&apikey={TWELVE_DATA_KEY}"
-        rsi = float(requests.get(rsi_url, timeout=5).json()['values'][0]['rsi'])
-
-        sma20_url = f"https://api.twelvedata.com/sma?symbol={symbol}&interval={interval}&time_period=20&apikey={TWELVE_DATA_KEY}"
-        sma20 = float(requests.get(sma20_url, timeout=5).json()['values'][0]['sma'])
-
-        sma50_url = f"https://api.twelvedata.com/sma?symbol={symbol}&interval={interval}&time_period=50&apikey={TWELVE_DATA_KEY}"
-        sma50 = float(requests.get(sma50_url, timeout=5).json()['values'][0]['sma'])
-
-        return {"rsi": rsi, "sma20": sma20, "sma50": sma50}
+        url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize=60&apikey={TWELVE_DATA_KEY}"
+        res = requests.get(url, timeout=5).json()
+        if 'values' not in res:
+            return None
+        closes = [float(item['close']) for item in res['values']]
+        
+        rsi = calculate_rsi(closes, 14)
+        sma20 = calculate_sma(closes, 20)
+        sma50 = calculate_sma(closes, 50)
+        
+        return {"rsi": rsi, "sma20": sma20, "sma50": sma50, "price": closes[0]}
     except Exception as e:
         print(f"Error fetching {interval} for {symbol}: {e}")
         return None
 
 def fetch_asset_analysis(symbol):
-    if not TWELVE_DATA_KEY:
+    htf_data = fetch_tf_data(symbol, "4h")
+    ltf_data = fetch_tf_data(symbol, "15min")
+
+    if not htf_data or not ltf_data:
         return None
-    try:
-        price_url = f"https://api.twelvedata.com/price?symbol={symbol}&apikey={TWELVE_DATA_KEY}"
-        price = float(requests.get(price_url, timeout=5).json()['price'])
 
-        htf_data = fetch_tf_data(symbol, "4h")
-        ltf_data = fetch_tf_data(symbol, "15min")
-
-        if not htf_data or not ltf_data:
-            return None
-
-        return {"price": price, "htf": htf_data, "ltf": ltf_data}
-    except Exception as e:
-        print(f"Analysis Error for {symbol}: {e}")
-        return None
+    return {"price": ltf_data['price'], "htf": htf_data, "ltf": ltf_data}
 
 def generate_multi_timeframe_signal(symbol):
     data = fetch_asset_analysis(symbol)
@@ -170,7 +209,7 @@ def generate_multi_timeframe_signal(symbol):
     htf = data['htf']
     ltf = data['ltf']
 
-    # HTF Macro Classification
+    # 4H Macro Classification
     if 45.0 <= htf['rsi'] <= 55.0 or abs(htf['sma20'] - htf['sma50']) / price < 0.0005:
         htf_bias = "RANGING / SIDEWAYS 🟡"
     elif htf['sma20'] > htf['sma50']:
@@ -178,7 +217,7 @@ def generate_multi_timeframe_signal(symbol):
     else:
         htf_bias = "BEARISH 🔴"
 
-    # LTF Micro Signals
+    # 15M Micro Signals
     ltf_bullish = ltf['sma20'] > ltf['sma50'] and ltf['rsi'] > 50
     ltf_bearish = ltf['sma20'] < ltf['sma50'] and ltf['rsi'] < 50
 
@@ -186,42 +225,36 @@ def generate_multi_timeframe_signal(symbol):
     if "BULLISH" in htf_bias and ltf_bullish:
         trade_type = "TREND CONTINUATION 🚀"
         signal = "BUY / LONG 🟢"
-        risk_pct = 1.0
         sl_dist, tp_dist = spec['trend_sl'], spec['trend_tp']
         note = "4H & 15M aligned in strong uptrend."
 
     elif "BEARISH" in htf_bias and ltf_bearish:
         trade_type = "TREND CONTINUATION 🚀"
         signal = "SELL / SHORT 🔴"
-        risk_pct = 1.0
         sl_dist, tp_dist = spec['trend_sl'], spec['trend_tp']
         note = "4H & 15M aligned in strong downtrend."
 
     elif "BULLISH" in htf_bias and ltf_bearish:
         trade_type = "COUNTER-TREND SCALP ⚡"
         signal = "SELL / SHORT (SCALP) 🟡"
-        risk_pct = 0.5
         sl_dist, tp_dist = spec['scalp_sl'], spec['scalp_tp']
-        note = "⚠️ Counter 4H Trend! Reduced risk for a quick pullback scalp."
+        note = "⚠️ Counter 4H Trend! Quick pullback scalp."
 
     elif "BEARISH" in htf_bias and ltf_bullish:
         trade_type = "COUNTER-TREND SCALP ⚡"
         signal = "BUY / LONG (SCALP) 🟡"
-        risk_pct = 0.5
         sl_dist, tp_dist = spec['scalp_sl'], spec['scalp_tp']
-        note = "⚠️ Counter 4H Trend! Reduced risk for a quick pullback scalp."
+        note = "⚠️ Counter 4H Trend! Quick pullback scalp."
 
     elif "RANGING" in htf_bias and ltf_bullish:
         trade_type = "RANGE BREAKOUT / SCALP ⚡"
         signal = "BUY / LONG (SCALP) 🟢"
-        risk_pct = 0.5
         sl_dist, tp_dist = spec['scalp_sl'], spec['scalp_tp']
         note = "4H Consolidation with 15M momentum bullish breakout."
 
     elif "RANGING" in htf_bias and ltf_bearish:
         trade_type = "RANGE BREAKOUT / SCALP ⚡"
         signal = "SELL / SHORT (SCALP) 🔴"
-        risk_pct = 0.5
         sl_dist, tp_dist = spec['scalp_sl'], spec['scalp_tp']
         note = "4H Consolidation with 15M momentum bearish breakdown."
 
@@ -257,10 +290,65 @@ def generate_multi_timeframe_signal(symbol):
         "tp_price": tp_price,
         "sl_dist": sl_dist,
         "tp_dist": tp_dist,
-        "risk_pct": risk_pct,
         "note": note,
         "spec": spec
     }
+
+# --- ⚡ INSTANT 60-SECOND PUSH NOTIFICATION SCANNER ENGINE ---
+
+def live_market_scanner_loop():
+    print("⚡ Instant 60-second market scanner engine active!")
+    while True:
+        try:
+            for symbol in ASSET_SPECS.keys():
+                sig = generate_multi_timeframe_signal(symbol)
+                
+                if not sig or sig.get('is_sideways'):
+                    LAST_SIGNALS[symbol] = "SIDEWAYS"
+                    continue
+
+                signal_key = f"{sig['signal']}_{sig['trade_type']}"
+
+                # PUSH INSTANT ALERT ONLY IF SIGNAL IS NEW OR CHANGED
+                if LAST_SIGNALS.get(symbol) != signal_key:
+                    LAST_SIGNALS[symbol] = signal_key
+                    active_users = get_all_active_chat_ids()
+
+                    spec = sig['spec']
+                    pips_sl = int(sig['sl_dist'] * spec['pip_factor'])
+                    pips_tp = int(sig['tp_dist'] * spec['pip_factor'])
+
+                    for chat_id in active_users:
+                        active_balance = get_user_balance(chat_id)
+                        
+                        alert_card = (
+                            f"🚨 **INSTANT SIGNAL ALERT — {sig['name']}** 🚨\n"
+                            f"━━━━━━━━━━━━━━━━━━━\n"
+                            f"💵 **Live Price:** {sig['price']:,.{spec['decimals']}f}\n"
+                            f"🏛 **4H Macro Trend:** {sig['htf_bias']}\n"
+                            f"🏷 **Trade Type:** {sig['trade_type']}\n\n"
+                            f"💡 **Signal:** {sig['signal']}\n"
+                            f"• **Entry:** {sig['price']:,.{spec['decimals']}f}\n"
+                            f"• **Stop Loss (SL):** {sig['sl_price']:,.{spec['decimals']}f} ({pips_sl} {spec['unit']})\n"
+                            f"• **Take Profit (TP):** {sig['tp_price']:,.{spec['decimals']}f} ({pips_tp} {spec['unit']})\n\n"
+                            f"⚡ *Fresh market setup formed live! Tap below for cent lot size:* "
+                        )
+
+                        markup = InlineKeyboardMarkup(row_width=3)
+                        b_low = InlineKeyboardButton("🛡 Low (0.25%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_0.25_{active_balance}")
+                        b_std = InlineKeyboardButton("⚖️ Std (1.0%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_1.0_{active_balance}")
+                        b_high = InlineKeyboardButton("🚀 High (5.0%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_5.0_{active_balance}")
+                        markup.add(b_low, b_std, b_high)
+
+                        try:
+                            bot.send_message(chat_id, alert_card, reply_markup=markup, parse_mode="Markdown")
+                        except Exception as send_err:
+                            print(f"Failed to push alert to {chat_id}: {send_err}")
+
+        except Exception as e:
+            print(f"Live Scanner Loop Notice: {e}")
+
+        time.sleep(60)
 
 # --- TELEGRAM HANDLERS ---
 
@@ -268,9 +356,10 @@ def generate_multi_timeframe_signal(symbol):
 def send_welcome(message):
     current_bal = get_user_balance(message.chat.id)
     msg = (
-        "🎯 **Sniper Trading Dashboard Active (Cent Account Mode)!**\n\n"
-        f"💰 **Active Account Balance:** `${current_bal:,.2f}`\n\n"
-        "Tap any market button below to analyze signals, or type your balance directly (e.g. `57.49` or `5749`)."
+        "🎯 **Sniper Trading Dashboard Active (Instant 60s Scan Mode)!**\n\n"
+        f"💰 **Active Account Capital:** `${current_bal:,.2f} USD`\n"
+        "⚡ **Live Engine Status:** Scanning 24/7 for instant push alerts.\n\n"
+        "Tap any market button below to analyze live charts, or type your balance directly (e.g. `57.59`)."
     )
     bot.send_message(message.chat.id, msg, reply_markup=get_main_dashboard(), parse_mode="Markdown")
 
@@ -301,15 +390,15 @@ def process_signal_request(message, symbol):
         f"• **Entry:** {sig['price']:,.{spec['decimals']}f}\n"
         f"• **Stop Loss (SL):** {sig['sl_price']:,.{spec['decimals']}f} ({pips_sl} {spec['unit']})\n"
         f"• **Take Profit (TP):** {sig['tp_price']:,.{spec['decimals']}f} ({pips_tp} {spec['unit']})\n\n"
-        f"📝 **Bot Context:** {sig['note']}"
+        f"📝 **Bot Context:** {sig['note']}\n\n"
+        f"👇 **Select Risk Exposure to Calculate Cent Lot Size:**"
     )
 
-    markup = InlineKeyboardMarkup()
-    calc_button = InlineKeyboardButton(
-        text="⚖️ Calculate Cent Lot Size", 
-        callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_{sig['risk_pct']}_{active_balance}"
-    )
-    markup.add(calc_button)
+    markup = InlineKeyboardMarkup(row_width=3)
+    b_low = InlineKeyboardButton("🛡 Low (0.25%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_0.25_{active_balance}")
+    b_std = InlineKeyboardButton("⚖️ Std (1.0%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_1.0_{active_balance}")
+    b_high = InlineKeyboardButton("🚀 High (5.0%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_5.0_{active_balance}")
+    markup.add(b_low, b_std, b_high)
 
     bot.send_message(message.chat.id, card, reply_markup=markup, parse_mode="Markdown")
 
@@ -331,7 +420,7 @@ def handle_balance_menu(message):
     msg = (
         f"💰 **Account Balance Settings**\n\n"
         f"Current Balance: **${current_bal:,.2f} USD**\n\n"
-        "Tap a preset button below or simply type your balance directly (e.g. `57.49`):"
+        "Tap a preset button below or simply type your balance number directly (e.g. `57.59`):"
     )
     bot.send_message(message.chat.id, msg, reply_markup=get_balance_presets(), parse_mode="Markdown")
 
@@ -342,10 +431,10 @@ def handle_bot_info(message):
         "🤖 **Sniper Assistant (Cent Engine)**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "• **Supported Cent Pairs:** XAUUSDc, BTCUSDc, EURUSDc\n"
-        "• **Strategy Matrix:** 4H Macro + 15M Micro Alignment & Range Breakout\n"
-        "• **Risk Rules:** 1.0% Trend / 0.5% Scalp & Breakout\n"
+        "• **Live Scanner:** 60-second continuous background loop ⚡\n"
+        "• **Risk Modes:** 0.25% (Low), 1.0% (Standard), 5.0% (High Exposure)\n"
         f"• **Active Balance:** ${current_bal:,.2f} USD\n"
-        "• **Status:** Connected & Hunting 24/7 🚀"
+        "• **Status:** Connected & Hunting Live 24/7 🚀"
     )
     bot.send_message(message.chat.id, info_text, reply_markup=get_main_dashboard(), parse_mode="Markdown")
 
@@ -391,20 +480,21 @@ def handle_lot_calculation(call):
         risk_dollars = active_balance * (risk_pct / 100.0)
         reward_dollars = risk_dollars * (tp_dist / sl_dist)
         
-        # Exact Cent Lot Calculation Formula
+        # Precise Cent Lot Formula
         cent_lot_size = risk_dollars / (sl_dist * spec['contract_size'])
+        pips_tp = int(tp_dist * spec['pip_factor'])
 
         calc_text = (
-            f"⚖️ **CENT LOT POSITION SIZING — {spec['name']}**\n"
+            f"⚖️ **POSITION SIZING ({risk_pct}% RISK) — {spec['name']}**\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"• **Account Capital:** `${active_balance:,.2f} USD`\n"
             f"• **Recommended Lot Size:** `{cent_lot_size:.2f} Cent Lots`\n"
-            f"• **Max Risk:** -${risk_dollars:,.2f} USD ({risk_pct:.1f}%)\n"
-            f"• **Target Reward:** +${reward_dollars:,.2f} USD\n\n"
-            f"💡 *Enter `{cent_lot_size:.2f}` directly into your MetaTrader Cent account terminal.*"
+            f"• **Max Risk (Loss):** -${risk_dollars:,.2f} USD\n"
+            f"• **Target Reward (Win):** +${reward_dollars:,.2f} USD ({pips_tp} {spec['unit']})\n\n"
+            f"💡 *Enter `{cent_lot_size:.2f}` into your MetaTrader Cent account terminal.*"
         )
 
-        bot.answer_callback_query(call.id, text="Cent Lot Size Calculated!")
+        bot.answer_callback_query(call.id, text=f"Calculated for {risk_pct}% Risk!")
         bot.send_message(call.message.chat.id, calc_text, parse_mode="Markdown")
 
     except Exception as e:
@@ -415,16 +505,24 @@ def run_bot():
     print("Telegram bot is listening...")
     bot.infinity_polling()
 
-# --- FLASK KEEP-ALIVE SERVER ---
+# --- FLASK KEEP-ALIVE SERVER & THREAD LAUNCHERS ---
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Sniper Bot Engine is awake and hunting!"
+    return "Sniper Bot Engine is active and hunting live!"
 
 if __name__ == "__main__":
+    # 1. Start Telegram Polling Thread
     bot_thread = threading.Thread(target=run_bot)
+    bot_thread.daemon = True
     bot_thread.start()
+
+    # 2. Start 60-Second Instant Scanner Thread
+    scanner_thread = threading.Thread(target=live_market_scanner_loop)
+    scanner_thread.daemon = True
+    scanner_thread.start()
     
+    # 3. Start Web Server
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
