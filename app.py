@@ -7,6 +7,13 @@ import telebot
 BOT_TOKEN = os.environ.get('BOT_TOKEN', 'YOUR_TELEGRAM_BOT_TOKEN_HERE')
 bot = telebot.TeleBot(BOT_TOKEN)
 
+# Remove any old webhooks to allow polling
+try:
+    bot.remove_webhook()
+    print("Old webhook cleared successfully!")
+except Exception as e:
+    print(f"Notice: {e}")
+
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     bot.reply_to(message, "Sniper Bot Beta is live 24/7 on Render! 🚀")
