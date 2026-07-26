@@ -34,7 +34,6 @@ LAST_SIGNALS = {
     "EUR/USD": None
 }
 
-# Live cache populated by the background scanner
 LIVE_MARKET_CACHE = {
     "XAU/USD": None,
     "BTC/USD": None,
@@ -185,7 +184,6 @@ def fetch_tf_data(symbol, interval):
         url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize=60&apikey={TWELVE_DATA_KEY}"
         res = requests.get(url, timeout=5).json()
         if 'values' not in res:
-            print(f"API Limit/Error for {symbol}: {res.get('message', 'No values')}")
             return None
         closes = [float(item['close']) for item in res['values']]
         
@@ -200,7 +198,7 @@ def fetch_tf_data(symbol, interval):
 
 def fetch_asset_analysis(symbol):
     htf_data = fetch_tf_data(symbol, "4h")
-    time.sleep(1.5)  # Throttle to prevent 429 rate limit errors
+    time.sleep(1.5)
     ltf_data = fetch_tf_data(symbol, "15min")
 
     if not htf_data or not ltf_data:
@@ -300,16 +298,15 @@ def generate_multi_timeframe_signal(symbol):
         "spec": spec
     }
 
-# --- ⚡ SCANNER ENGINE WITH SMART CACHING ---
+# --- ⚡ SCANNER ENGINE FOR ALL PAIRS ---
 
 def live_market_scanner_loop():
-    print("⚡ Instant market scanner loop initialized!")
+    print("⚡ Instant market scanner loop running for ALL pairs!")
     while True:
         try:
             for symbol in ASSET_SPECS.keys():
                 sig = generate_multi_timeframe_signal(symbol)
                 
-                # Store fresh analysis in memory cache
                 if sig:
                     LIVE_MARKET_CACHE[symbol] = sig
 
@@ -355,7 +352,7 @@ def live_market_scanner_loop():
                         except Exception as send_err:
                             print(f"Failed to push alert to {chat_id}: {send_err}")
 
-                time.sleep(2)  # Pause between assets to stay within rate limits
+                time.sleep(2)
 
         except Exception as e:
             print(f"Scanner Loop Error: {e}")
@@ -370,7 +367,7 @@ def send_welcome(message):
     msg = (
         "🎯 **Sniper Trading Dashboard Active (Instant Scan Mode)!**\n\n"
         f"💰 **Active Capital:** `${current_bal:,.2f} USD`\n"
-        "⚡ **Scanner Status:** Hunting continuously for instant push alerts.\n\n"
+        "⚡ **Scanner Status:** Hunting all pairs continuously for instant push alerts.\n\n"
         "Tap any market button below for analysis, or type your balance directly (e.g. `57.59`)."
     )
     bot.send_message(message.chat.id, msg, reply_markup=get_main_dashboard(), parse_mode="Markdown")
@@ -379,7 +376,6 @@ def process_signal_request(message, symbol):
     bot.send_chat_action(message.chat.id, 'typing')
     active_balance = get_user_balance(message.chat.id)
 
-    # Fast cache lookup: avoid making new API requests if scanner already fetched it
     sig = LIVE_MARKET_CACHE.get(symbol)
     if not sig:
         sig = generate_multi_timeframe_signal(symbol)
@@ -449,7 +445,7 @@ def handle_bot_info(message):
         "🤖 **Sniper Assistant (Cent Engine)**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "• **Supported Pairs:** XAUUSDc, BTCUSDc, EURUSDc\n"
-        "• **Live Scanner:** 60-second continuous background loop ⚡\n"
+        "• **Live Scanner:** 60-second continuous background loop for ALL pairs ⚡\n"
         "• **Risk Modes:** 0.25% (Low), 1.0% (Standard), 5.0% (High Exposure)\n"
         f"• **Active Balance:** ${current_bal:,.2f} USD\n"
         "• **Status:** Connected & Hunting Live 24/7 🚀"
