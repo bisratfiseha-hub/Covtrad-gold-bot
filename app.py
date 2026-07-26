@@ -102,7 +102,7 @@ ASSET_SPECS = {
     }
 }
 
-# Global Memory State & Live Cache initialized dynamically from ASSET_SPECS
+# Global Memory State & Live Cache
 LAST_SIGNALS = {symbol: None for symbol in ASSET_SPECS.keys()}
 LIVE_MARKET_CACHE = {symbol: None for symbol in ASSET_SPECS.keys()}
 
@@ -248,7 +248,7 @@ def fetch_tf_data(symbol, interval):
         return None
     try:
         url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize=60&apikey={TWELVE_DATA_KEY}"
-        res = requests.get(url, timeout=5).json()
+        res = requests.get(url, timeout=7).json()
         if 'values' not in res:
             return None
         closes = [float(item['close']) for item in res['values']]
@@ -264,7 +264,7 @@ def fetch_tf_data(symbol, interval):
 
 def fetch_asset_analysis(symbol):
     htf_data = fetch_tf_data(symbol, "4h")
-    time.sleep(1.0)
+    time.sleep(1.0) # Polite pause for rate limit safety
     ltf_data = fetch_tf_data(symbol, "15min")
 
     if not htf_data or not ltf_data:
@@ -364,10 +364,10 @@ def generate_multi_timeframe_signal(symbol):
         "spec": spec
     }
 
-# --- ⚡ INSTITUTIONAL SCANNER ENGINE ---
+# --- ⚡ RATE-LIMIT AWARE SCANNER ENGINE ---
 
 def live_market_scanner_loop():
-    print("⚡ Institutional scanner operational across expanded portfolio...")
+    print("⚡ Institutional scanner operational with rate-limit pacing...")
     while True:
         try:
             for symbol in ASSET_SPECS.keys():
@@ -378,7 +378,7 @@ def live_market_scanner_loop():
 
                 if not sig or sig.get('is_sideways'):
                     LAST_SIGNALS[symbol] = "SIDEWAYS"
-                    time.sleep(1.5)
+                    time.sleep(3)
                     continue
 
                 signal_key = f"{sig['signal']}_{sig['trade_type']}"
@@ -418,12 +418,13 @@ def live_market_scanner_loop():
                         except Exception as send_err:
                             print(f"Failed to push alert to {chat_id}: {send_err}")
 
-                time.sleep(1.5)
+                # Stagger requests to comfortably stay within Twelve Data free limits
+                time.sleep(8)
 
         except Exception as e:
             print(f"Scanner Loop Error: {e}")
 
-        time.sleep(45)
+        time.sleep(30)
 
 # --- TELEGRAM HANDLERS ---
 
@@ -443,14 +444,23 @@ def process_signal_request(message, symbol):
     bot.send_chat_action(message.chat.id, 'typing')
     active_balance = get_user_balance(message.chat.id)
 
+    # First check live cache
     sig = LIVE_MARKET_CACHE.get(symbol)
+    
+    # If cache is empty, try fetching live data once
     if not sig:
         sig = generate_multi_timeframe_signal(symbol)
         if sig:
             LIVE_MARKET_CACHE[symbol] = sig
 
+    # If still None (due to rate limiting), fallback gracefully instead of throwing error
     if not sig:
-        bot.send_message(message.chat.id, f"⚠️ Synchronizing market feed for {symbol}. Re-attempting shortly.", reply_markup=get_main_dashboard())
+        bot.send_message(
+            message.chat.id, 
+            f"⚠️ API feed busy or rate-limited for `{symbol}`. Please allow the background scanner 1 minute to refresh cache, then try again.", 
+            reply_markup=get_main_dashboard(), 
+            parse_mode="Markdown"
+        )
         return
 
     if sig.get('is_sideways'):
@@ -522,7 +532,7 @@ def handle_bot_info(message):
         "⚙️ **System Diagnostic Matrix**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "• **Active Feeds:** 11 Instruments (Forex, Crypto, Metals)\n"
-        "• **Surveillance Interval:** Continuous background polling\n"
+        "• **Surveillance Interval:** Rate-limited background queue\n"
         "• **Risk Parameters:** 0.25% / 1.0% / 5.0% Exposure Tiers\n"
         f"• **Configured Capital:** `${current_bal:,.2f} USD`\n"
         "• **System Status:** Fully Operational 🟢"
@@ -547,7 +557,6 @@ def handle_asset_selection_callback(call):
     try:
         symbol = call.data.split('_', 1)[1]
         bot.answer_callback_query(call.id, text=f"Loading {symbol} analysis...")
-        # Create a mock message object wrapper for process_signal_request
         class MockMessage:
             def __init__(self, chat_id):
                 self.chat = type('obj', (object,), {'id': chat_id})
