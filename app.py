@@ -160,16 +160,16 @@ def get_all_active_chat_ids():
 
 init_db()
 
-# --- PROFESSIONAL CATEGORY KEYBOARDS ---
+# --- BETA 1.0 STYLE CLEAN REPLY DASHBOARD ---
 
 def get_main_dashboard():
     markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    btn_gold = KeyboardButton("🥇 Gold (XAUUSDc)")
     btn_forex = KeyboardButton("📊 Forex Markets (Top 6)")
     btn_crypto = KeyboardButton("🪙 Crypto Assets")
-    btn_gold = KeyboardButton("🥇 Commodities (Gold)")
     btn_balance = KeyboardButton("💳 Configure Capital")
     btn_info = KeyboardButton("⚙️ Terminal Diagnostics")
-    markup.add(btn_forex, btn_crypto, btn_gold, btn_balance, btn_info)
+    markup.add(btn_gold, btn_forex, btn_crypto, btn_balance, btn_info)
     return markup
 
 def get_forex_submenu():
@@ -264,7 +264,7 @@ def fetch_tf_data(symbol, interval):
 
 def fetch_asset_analysis(symbol):
     htf_data = fetch_tf_data(symbol, "4h")
-    time.sleep(1.0) # Polite pause for rate limit safety
+    time.sleep(1.0)
     ltf_data = fetch_tf_data(symbol, "15min")
 
     if not htf_data or not ltf_data:
@@ -334,7 +334,8 @@ def generate_multi_timeframe_signal(symbol):
             "text": (
                 f"📊 **MARKET PROFILE — {spec['name']}**\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"💵 **Current Price:** `{price:,.{spec['decimals']}f}`\n"
+                f"⏱ **Timeframe Matrix:** `4H (Macro) & 15M (Execution)`\n"
+                f"💵 **Current Market Price:** `{price:,.{spec['decimals']}f}`\n"
                 f"🏛 **4H Macro Context:** {htf_bias}\n"
                 f"📈 **15M Momentum (RSI):** `{ltf['rsi']:.1f}`\n\n"
                 f"⏳ **Status:** *Consolidation zone detected. Awaiting directional expansion trigger.*"
@@ -397,7 +398,8 @@ def live_market_scanner_loop():
                         alert_card = (
                             f"🚨 **INSTANT TRADE BROADCAST — {sig['name']}**\n"
                             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                            f"💵 **Live Price:** `{sig['price']:,.{spec['decimals']}f}`\n"
+                            f"⏱ **Timeframe Matrix:** `4H (Macro) & 15M (Execution)`\n"
+                            f"💵 **Current Market Price:** `{sig['price']:,.{spec['decimals']}f}`\n"
                             f"🏛 **Macro Bias (4H):** {sig['htf_bias']}\n"
                             f"🏷 **Setup Type:** `{sig['trade_type']}`\n\n"
                             f"💡 **Directive:** {sig['signal']}\n"
@@ -418,7 +420,6 @@ def live_market_scanner_loop():
                         except Exception as send_err:
                             print(f"Failed to push alert to {chat_id}: {send_err}")
 
-                # Stagger requests to comfortably stay within Twelve Data free limits
                 time.sleep(8)
 
         except Exception as e:
@@ -435,8 +436,8 @@ def send_welcome(message):
         "📈 **INSTANT TRADING TERMINAL ACTIVE**\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"💳 **Assigned Capital:** `${current_bal:,.2f} USD`\n"
-        "⚡ **Engine Status:** Continuous multi-asset surveillance running across Forex, Crypto, & Metals.\n\n"
-        "Select a category below to browse live matrices:"
+        "⚡ **Engine Status:** Live surveillance running across Forex, Crypto, & Metals.\n\n"
+        "Select an option below:"
     )
     bot.send_message(message.chat.id, msg, reply_markup=get_main_dashboard(), parse_mode="Markdown")
 
@@ -444,20 +445,16 @@ def process_signal_request(message, symbol):
     bot.send_chat_action(message.chat.id, 'typing')
     active_balance = get_user_balance(message.chat.id)
 
-    # First check live cache
     sig = LIVE_MARKET_CACHE.get(symbol)
-    
-    # If cache is empty, try fetching live data once
     if not sig:
         sig = generate_multi_timeframe_signal(symbol)
         if sig:
             LIVE_MARKET_CACHE[symbol] = sig
 
-    # If still None (due to rate limiting), fallback gracefully instead of throwing error
     if not sig:
         bot.send_message(
             message.chat.id, 
-            f"⚠️ API feed busy or rate-limited for `{symbol}`. Please allow the background scanner 1 minute to refresh cache, then try again.", 
+            f"⚠️ API feed syncing for `{symbol}`. Please allow the background scanner 1 minute to refresh cache, then try again.", 
             reply_markup=get_main_dashboard(), 
             parse_mode="Markdown"
         )
@@ -474,7 +471,8 @@ def process_signal_request(message, symbol):
     card = (
         f"💎 **PRO-GRADE SIGNAL MATRIX — {sig['name']}**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"💵 **Live Price:** `{sig['price']:,.{spec['decimals']}f}`\n"
+        f"⏱ **Timeframe Matrix:** `4H (Macro) & 15M (Execution)`\n"
+        f"💵 **Current Market Price:** `{sig['price']:,.{spec['decimals']}f}`\n"
         f"🏛 **Macro Bias (4H):** {sig['htf_bias']}\n"
         f"🏷 **Setup Classification:** `{sig['trade_type']}`\n\n"
         f"💡 **Directive:** {sig['signal']}\n"
@@ -493,6 +491,10 @@ def process_signal_request(message, symbol):
 
     bot.send_message(message.chat.id, card, reply_markup=markup, parse_mode="Markdown")
 
+@bot.message_handler(func=lambda msg: msg.text in ["🥇 Gold (XAUUSDc)", "/gold"])
+def handle_gold(message):
+    process_signal_request(message, "XAU/USD")
+
 @bot.message_handler(func=lambda msg: msg.text == "📊 Forex Markets (Top 6)")
 def handle_forex_menu(message):
     bot.send_message(
@@ -510,10 +512,6 @@ def handle_crypto_menu(message):
         reply_markup=get_crypto_submenu(), 
         parse_mode="Markdown"
     )
-
-@bot.message_handler(func=lambda msg: msg.text in ["🥇 Commodities (Gold)", "/gold"])
-def handle_gold(message):
-    process_signal_request(message, "XAU/USD")
 
 @bot.message_handler(func=lambda msg: msg.text in ["💳 Configure Capital", "/setbalance"])
 def handle_balance_menu(message):
