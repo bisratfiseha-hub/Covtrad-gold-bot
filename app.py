@@ -19,15 +19,25 @@ except Exception as e:
 
 # --- ZERO-LAG DATA FETCHERS ---
 
-def get_binance_price(symbol="BTCUSDT"):
-    """Fetches real-time crypto prices from Binance (Zero lag, no key required)"""
+def get_btc_price():
+    """Fetches real-time BTC price via Coinbase (unblocked on Render) with Twelve Data backup"""
     try:
-        url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
+        url = "https://api.coinbase.com/v2/prices/BTC-USD/spot"
         res = requests.get(url, timeout=5).json()
-        return float(res['price'])
+        return float(res['data']['amount'])
     except Exception as e:
-        print(f"Binance API Error: {e}")
-        return None
+        print(f"Coinbase API Error: {e}")
+        
+    # Backup: Twelve Data
+    if TWELVE_DATA_KEY:
+        try:
+            url = f"https://api.twelvedata.com/price?symbol=BTC/USD&apikey={TWELVE_DATA_KEY}"
+            res = requests.get(url, timeout=5).json()
+            return float(res['price'])
+        except Exception as ex:
+            print(f"Twelve Data BTC Error: {ex}")
+            
+    return None
 
 def get_gold_price():
     """Fetches real-time Gold (XAU/USD) price from Twelve Data"""
@@ -53,15 +63,15 @@ def send_welcome(message):
     )
     bot.reply_to(message, msg)
 
-@bot.message_handler(commands=['btc'])
+@bot.message_handler(commands=['btc', 'BTC'])
 def btc_command(message):
-    price = get_binance_price("BTCUSDT")
+    price = get_btc_price()
     if price:
-        bot.reply_to(message, f"⚡ **BTC/USDT Live Price:** ${price:,.2f}")
+        bot.reply_to(message, f"⚡ **BTC/USD Live Price:** ${price:,.2f}")
     else:
         bot.reply_to(message, "⚠️ Failed to fetch BTC price.")
 
-@bot.message_handler(commands=['gold'])
+@bot.message_handler(commands=['gold', 'GOLD'])
 def gold_command(message):
     price = get_gold_price()
     if isinstance(price, float):
