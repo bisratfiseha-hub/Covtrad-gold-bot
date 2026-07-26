@@ -3,14 +3,19 @@ import threading
 import requests
 from flask import Flask
 import telebot
+from telebot.types import (
+    InlineKeyboardMarkup, 
+    InlineKeyboardButton, 
+    ReplyKeyboardMarkup, 
+    KeyboardButton
+)
 
 # --- CONFIGURATION & ENV VARIABLES ---
 BOT_TOKEN = os.environ.get('BOT_TOKEN', 'YOUR_TELEGRAM_BOT_TOKEN_HERE')
 TWELVE_DATA_KEY = os.environ.get('TWELVE_DATA_API_KEY', '')
 
-# In-memory balance store (Defaults to $1,000 if user hasn't set one)
-DEFAULT_BALANCE = 1000.0
-DEFAULT_RISK_PCT = 1.0  # 1% standard risk on trend setups
+DEFAULT_BALANCE = 5000.0
+DEFAULT_RISK_PCT = 1.0
 USER_BALANCES = {}
 
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -21,10 +26,30 @@ try:
 except Exception as e:
     print(f"Webhook reset notice: {e}")
 
+# --- PERSISTENT KEYBOARD DASHBOARD ---
+
+def get_main_dashboard():
+    """Generates persistent clickable menu buttons at the bottom of Telegram"""
+    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    btn_signal = KeyboardButton("📊 Get Gold Signal")
+    btn_balance = KeyboardButton("💰 Set Balance")
+    btn_info = KeyboardButton("ℹ️ Bot Info")
+    markup.add(btn_signal, btn_balance, btn_info)
+    return markup
+
+def get_balance_presets():
+    """Generates inline buttons for quick balance selection"""
+    markup = InlineKeyboardMarkup(row_width=2)
+    b1 = InlineKeyboardButton("$1,000", callback_data="setbal_1000")
+    b2 = InlineKeyboardButton("$2,500", callback_data="setbal_2500")
+    b3 = InlineKeyboardButton("$5,000", callback_data="setbal_5000")
+    b4 = InlineKeyboardButton("$10,000", callback_data="setbal_10000")
+    markup.add(b1, b2, b3, b4)
+    return markup
+
 # --- TECHNICAL ANALYSIS FETCHERS ---
 
 def fetch_tf_data(symbol, interval):
-    """Fetches RSI, SMA20, and SMA50 for a specific timeframe"""
     if not TWELVE_DATA_KEY:
         return None
     try:
@@ -43,7 +68,6 @@ def fetch_tf_data(symbol, interval):
         return None
 
 def fetch_gold_analysis():
-    """Performs Multi-Timeframe Analysis on Gold (4H Macro + 15M Setup)"""
     if not TWELVE_DATA_KEY:
         return None
     try:
@@ -65,10 +89,10 @@ def fetch_gold_analysis():
         print(f"Gold MTF Error: {e}")
         return None
 
-def generate_gold_signal(active_balance):
+def get_gold_signal_data():
     data = fetch_gold_analysis()
     if not data:
-        return "⚠️ Unable to calculate Gold signal right now."
+        return None
 
     price = data['price']
     htf = data['htf']
@@ -79,50 +103,51 @@ def generate_gold_signal(active_balance):
     ltf_bullish = ltf['sma20'] > ltf['sma50'] and ltf['rsi'] > 50
     ltf_bearish = ltf['sma20'] < ltf['sma50'] and ltf['rsi'] < 50
 
-    # Multi-Timeframe Logic & Risk Rules
     if "BULLISH" in htf_bias and ltf_bullish:
         trade_type = "TREND CONTINUATION 🚀"
         signal = "BUY / LONG 🟢"
-        risk_pct = DEFAULT_RISK_PCT  # 1.0% Full Risk
-        sl_dist = 3.50               # 350 pips SL ($3.50 move)
-        tp_dist = 7.00               # 700 pips TP ($7.00 move)
+        risk_pct = DEFAULT_RISK_PCT
+        sl_dist = 3.50
+        tp_dist = 7.00
         note = "4H & 15M aligned! Standard trend setup."
 
     elif "BEARISH" in htf_bias and ltf_bullish:
         trade_type = "COUNTER-TREND SCALP ⚡"
         signal = "BUY / LONG (SCALP) 🟡"
-        risk_pct = DEFAULT_RISK_PCT * 0.5  # 0.5% Reduced Risk
-        sl_dist = 2.00                    # 200 pips SL ($2.00 move)
-        tp_dist = 3.00                    # 300 pips TP ($3.00 move)
+        risk_pct = DEFAULT_RISK_PCT * 0.5
+        sl_dist = 2.00
+        tp_dist = 3.00
         note = "⚠️ Counter 4H Trend! Reduced risk recommended for a quick scalp."
 
     elif "BEARISH" in htf_bias and ltf_bearish:
         trade_type = "TREND CONTINUATION 🚀"
         signal = "SELL / SHORT 🔴"
-        risk_pct = DEFAULT_RISK_PCT  # 1.0% Full Risk
-        sl_dist = 3.50               # 350 pips SL
-        tp_dist = 7.00               # 700 pips TP
+        risk_pct = DEFAULT_RISK_PCT
+        sl_dist = 3.50
+        tp_dist = 7.00
         note = "4H & 15M aligned! Standard trend setup."
 
     elif "BULLISH" in htf_bias and ltf_bearish:
         trade_type = "COUNTER-TREND SCALP ⚡"
         signal = "SELL / SHORT (SCALP) 🟡"
-        risk_pct = DEFAULT_RISK_PCT * 0.5  # 0.5% Reduced Risk
-        sl_dist = 2.00                    # 200 pips SL
-        tp_dist = 3.00                    # 300 pips TP
+        risk_pct = DEFAULT_RISK_PCT * 0.5
+        sl_dist = 2.00
+        tp_dist = 3.00
         note = "⚠️ Counter 4H Trend! Reduced risk recommended for a quick scalp."
 
     else:
-        return (
-            f"📊 **Gold (XAU/USD) Market Context**\n"
-            f"━━━━━━━━━━━━━━━━━━━\n"
-            f"💵 **Live Price:** ${price:,.2f}\n"
-            f"🏛 **4H Macro Trend:** {htf_bias}\n"
-            f"📊 **15M RSI:** {ltf['rsi']:.1f}\n\n"
-            f"💡 **Signal:** SIDEWAYS / WAIT FOR BREAKOUT ⏳"
-        )
+        return {
+            "is_sideways": True,
+            "text": (
+                f"📊 **Gold (XAU/USD) Market Context**\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
+                f"💵 **Live Price:** ${price:,.2f}\n"
+                f"🏛 **4H Macro Trend:** {htf_bias}\n"
+                f"📊 **15M RSI:** {ltf['rsi']:.1f}\n\n"
+                f"💡 **Signal:** SIDEWAYS / WAIT FOR BREAKOUT ⏳"
+            )
+        }
 
-    # Calculate Entry, SL, and TP
     if "BUY" in signal:
         sl_price = price - sl_dist
         tp_price = price + tp_dist
@@ -130,80 +155,155 @@ def generate_gold_signal(active_balance):
         sl_price = price + sl_dist
         tp_price = price - tp_dist
 
-    # Active Account Risk Math
-    risk_dollars = active_balance * (risk_pct / 100.0)
-    reward_dollars = risk_dollars * (tp_dist / sl_dist)
-    
-    # Gold Lot Size Math (1 Standard Lot = $100 per $1 move)
-    lot_size = risk_dollars / (sl_dist * 100.0)
+    return {
+        "is_sideways": False,
+        "price": price,
+        "htf_bias": htf_bias,
+        "trade_type": trade_type,
+        "signal": signal,
+        "sl_price": sl_price,
+        "tp_price": tp_price,
+        "sl_dist": sl_dist,
+        "tp_dist": tp_dist,
+        "risk_pct": risk_pct,
+        "note": note
+    }
 
-    # Reference Lot Scaling per $1,000 Equity
-    ref_risk_dollars = 1000.0 * (risk_pct / 100.0)
-    ref_lot_size = ref_risk_dollars / (sl_dist * 100.0)
-
-    card = (
-        f"🎯 **GOLD (XAU/USD) INTELLIGENT SIGNAL**\n"
-        f"━━━━━━━━━━━━━━━━━━━\n"
-        f"💵 **Live Price:** ${price:,.2f}\n"
-        f"🏛 **4H Macro Trend:** {htf_bias}\n"
-        f"🏷 **Trade Type:** {trade_type}\n\n"
-        f"💡 **Signal:** {signal}\n"
-        f"• **Entry:** ${price:,.2f}\n"
-        f"• **Stop Loss (SL):** ${sl_price:,.2f} ({int(sl_dist*100)} pips)\n"
-        f"• **Take Profit (TP):** ${tp_price:,.2f} ({int(tp_dist*100)} pips)\n\n"
-        f"⚖️ **POSITION SIZING (${active_balance:,.0f} Account)**\n"
-        f"• **Recommended Lot Size:** `{lot_size:.2f} Lots`\n"
-        f"• **Max Risk:** -${risk_dollars:,.2f} ({risk_pct:.1f}%)\n"
-        f"• **Target Reward:** +${reward_dollars:,.2f}\n\n"
-        f"📏 **QUICK SCALING REFERENCE:**\n"
-        f"• `Use {ref_lot_size:.2f} Lots per $1,000 Equity`\n\n"
-        f"📝 **Bot Context:** {note}"
-    )
-    return card
-
-# --- TELEGRAM COMMAND HANDLERS ---
+# --- TELEGRAM COMMAND & TEXT HANDLERS ---
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
+    current_bal = USER_BALANCES.get(message.chat.id, DEFAULT_BALANCE)
     msg = (
-        "🎯 **Sniper Trading Assistant Active!** 24/7 Cloud Engine\n\n"
-        "**Commands:**\n"
-        "• `/gold` - Gold Signal (uses your saved balance)\n"
-        "• `/gold 5200` - Gold Signal for a specific $5,200 balance\n"
-        "• `/setbalance 5000` - Update your saved account balance"
+        "🎯 **Sniper Trading Dashboard Active!**\n\n"
+        f"💰 **Active Account Balance:** `${current_bal:,.2f}`\n\n"
+        "Use the buttons below to interact with the bot instantly without typing!"
     )
-    bot.reply_to(message, msg, parse_mode="Markdown")
+    bot.send_message(message.chat.id, msg, reply_markup=get_main_dashboard(), parse_mode="Markdown")
+
+@bot.message_handler(func=lambda msg: msg.text in ["📊 Get Gold Signal", "/gold"])
+def handle_gold_request(message):
+    bot.send_chat_action(message.chat.id, 'typing')
+    active_balance = USER_BALANCES.get(message.chat.id, DEFAULT_BALANCE)
+
+    sig = get_gold_signal_data()
+    if not sig:
+        bot.send_message(message.chat.id, "⚠️ Unable to calculate Gold signal right now.", reply_markup=get_main_dashboard())
+        return
+
+    if sig.get('is_sideways'):
+        bot.send_message(message.chat.id, sig['text'], reply_markup=get_main_dashboard(), parse_mode="Markdown")
+        return
+
+    # Clean Technical Card
+    card = (
+        f"🎯 **GOLD (XAU/USD) INTELLIGENT SIGNAL**\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"💵 **Live Price:** ${sig['price']:,.2f}\n"
+        f"🏛 **4H Macro Trend:** {sig['htf_bias']}\n"
+        f"🏷 **Trade Type:** {sig['trade_type']}\n\n"
+        f"💡 **Signal:** {sig['signal']}\n"
+        f"• **Entry:** ${sig['price']:,.2f}\n"
+        f"• **Stop Loss (SL):** ${sig['sl_price']:,.2f} ({int(sig['sl_dist']*100)} pips)\n"
+        f"• **Take Profit (TP):** ${sig['tp_price']:,.2f} ({int(sig['tp_dist']*100)} pips)\n\n"
+        f"📝 **Bot Context:** {sig['note']}"
+    )
+
+    markup = InlineKeyboardMarkup()
+    calc_button = InlineKeyboardButton(
+        text="⚖️ Calculate Position & Lot Size", 
+        callback_data=f"calc_{sig['sl_dist']}_{sig['tp_dist']}_{sig['risk_pct']}_{active_balance}"
+    )
+    markup.add(calc_button)
+
+    bot.send_message(message.chat.id, card, reply_markup=markup, parse_mode="Markdown")
+
+@bot.message_handler(func=lambda msg: msg.text in ["💰 Set Balance", "/setbalance"])
+def handle_balance_menu(message):
+    current_bal = USER_BALANCES.get(message.chat.id, DEFAULT_BALANCE)
+    msg = (
+        f"💰 **Account Balance Settings**\n\n"
+        f"Current Balance: **${current_bal:,.2f}**\n\n"
+        "Tap a preset below or type `/setbalance <amount>` (e.g. `/setbalance 4800`):"
+    )
+    bot.send_message(message.chat.id, msg, reply_markup=get_balance_presets(), parse_mode="Markdown")
+
+@bot.message_handler(func=lambda msg: msg.text == "ℹ️ Bot Info")
+def handle_bot_info(message):
+    current_bal = USER_BALANCES.get(message.chat.id, DEFAULT_BALANCE)
+    info_text = (
+        "🤖 **Sniper Assistant Engine**\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "• **Strategy:** 4H Macro Trend + 15M Entry Alignment\n"
+        "• **Risk Rules:** 1.0% Trend / 0.5% Counter-Trend\n"
+        f"• **Active Balance:** ${current_bal:,.2f}\n"
+        "• **Status:** Connected & Hunting 24/7 🚀"
+    )
+    bot.send_message(message.chat.id, info_text, reply_markup=get_main_dashboard(), parse_mode="Markdown")
 
 @bot.message_handler(commands=['setbalance'])
-def set_balance_command(message):
+def set_balance_direct(message):
     try:
         args = message.text.split()
         if len(args) < 2:
-            bot.reply_to(message, "⚠️ Usage: `/setbalance 5000` (Enter your balance amount).", parse_mode="Markdown")
+            handle_balance_menu(message)
             return
         
         new_balance = float(args[1])
         USER_BALANCES[message.chat.id] = new_balance
-        bot.reply_to(message, f"✅ Saved! Your default account balance is now set to **${new_balance:,.2f}**.", parse_mode="Markdown")
+        bot.send_message(message.chat.id, f"✅ Account balance saved as **${new_balance:,.2f}**!", reply_markup=get_main_dashboard(), parse_mode="Markdown")
     except ValueError:
-        bot.reply_to(message, "⚠️ Please enter a valid number, e.g., `/setbalance 5000`.", parse_mode="Markdown")
+        bot.send_message(message.chat.id, "⚠️ Invalid amount. Try `/setbalance 5000`.", reply_markup=get_main_dashboard())
 
-@bot.message_handler(commands=['gold', 'GOLD'])
-def gold_command(message):
-    bot.send_chat_action(message.chat.id, 'typing')
-    
-    # Check if user provided an on-the-fly balance argument (e.g., /gold 4500)
-    args = message.text.split()
-    if len(args) > 1:
-        try:
-            active_balance = float(args[1])
-        except ValueError:
-            active_balance = USER_BALANCES.get(message.chat.id, DEFAULT_BALANCE)
-    else:
-        active_balance = USER_BALANCES.get(message.chat.id, DEFAULT_BALANCE)
+# --- INLINE CALLBACK HANDLERS ---
 
-    card = generate_gold_signal(active_balance)
-    bot.reply_to(message, card, parse_mode="Markdown")
+@bot.callback_query_handler(func=lambda call: call.data.startswith('setbal_'))
+def handle_preset_balance(call):
+    try:
+        new_bal = float(call.data.split('_')[1])
+        USER_BALANCES[call.message.chat.id] = new_bal
+        bot.answer_callback_query(call.id, text=f"Balance set to ${new_bal:,.0f}!")
+        bot.send_message(
+            call.message.chat.id, 
+            f"✅ Account balance updated to **${new_bal:,.2f}**!", 
+            reply_markup=get_main_dashboard(), 
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        print(f"Preset balance error: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('calc_'))
+def handle_lot_calculation(call):
+    try:
+        _, sl_dist, tp_dist, risk_pct, active_balance = call.data.split('_')
+        sl_dist = float(sl_dist)
+        tp_dist = float(tp_dist)
+        risk_pct = float(risk_pct)
+        active_balance = float(active_balance)
+
+        risk_dollars = active_balance * (risk_pct / 100.0)
+        reward_dollars = risk_dollars * (tp_dist / sl_dist)
+        lot_size = risk_dollars / (sl_dist * 100.0)
+
+        ref_risk_dollars = 1000.0 * (risk_pct / 100.0)
+        ref_lot_size = ref_risk_dollars / (sl_dist * 100.0)
+
+        calc_text = (
+            f"⚖️ **POSITION SIZING (${active_balance:,.0f} Account)**\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"• **Recommended Lot Size:** `{lot_size:.2f} Lots`\n"
+            f"• **Max Risk:** -${risk_dollars:,.2f} ({risk_pct:.1f}%)\n"
+            f"• **Target Reward:** +${reward_dollars:,.2f}\n\n"
+            f"📏 **QUICK SCALING REFERENCE:**\n"
+            f"• `Use {ref_lot_size:.2f} Lots per $1,000 Equity`"
+        )
+
+        bot.answer_callback_query(call.id, text="Position Sizing Calculated!")
+        bot.send_message(call.message.chat.id, calc_text, parse_mode="Markdown")
+
+    except Exception as e:
+        print(f"Callback Error: {e}")
+        bot.answer_callback_query(call.id, text="Error calculating lot size.")
 
 def run_bot():
     print("Telegram bot is listening...")
