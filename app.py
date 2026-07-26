@@ -27,18 +27,84 @@ try:
 except Exception as e:
     print(f"Webhook reset notice: {e}")
 
-# Global Memory State & Live Cache
-LAST_SIGNALS = {
-    "XAU/USD": None,
-    "BTC/USD": None,
-    "EUR/USD": None
+# --- ASSET SPECS FOR CENT ACCOUNTS (EXPANDED PORTFOLIO) ---
+ASSET_SPECS = {
+    # --- FOREX (Top 6 Volatile Pairs) ---
+    "EUR/USD": {
+        "name": "EUR/USD (Euro Cent)",
+        "trend_sl": 0.0025,  "trend_tp": 0.0050,
+        "scalp_sl": 0.0012,  "scalp_tp": 0.0020,
+        "contract_size": 1.0, "pip_factor": 10000, "unit": "pips", "decimals": 5
+    },
+    "GBP/USD": {
+        "name": "GBP/USD (Cable Cent)",
+        "trend_sl": 0.0030,  "trend_tp": 0.0060,
+        "scalp_sl": 0.0015,  "scalp_tp": 0.0025,
+        "contract_size": 1.0, "pip_factor": 10000, "unit": "pips", "decimals": 5
+    },
+    "USD/JPY": {
+        "name": "USD/JPY (Yen Cent)",
+        "trend_sl": 0.35,    "trend_tp": 0.70,
+        "scalp_sl": 0.18,    "scalp_tp": 0.30,
+        "contract_size": 1.0, "pip_factor": 100,   "unit": "pips", "decimals": 3
+    },
+    "AUD/USD": {
+        "name": "AUD/USD (Aussie Cent)",
+        "trend_sl": 0.0025,  "trend_tp": 0.0050,
+        "scalp_sl": 0.0012,  "scalp_tp": 0.0020,
+        "contract_size": 1.0, "pip_factor": 10000, "unit": "pips", "decimals": 5
+    },
+    "USD/CAD": {
+        "name": "USD/CAD (Loonie Cent)",
+        "trend_sl": 0.0025,  "trend_tp": 0.0050,
+        "scalp_sl": 0.0012,  "scalp_tp": 0.0020,
+        "contract_size": 1.0, "pip_factor": 10000, "unit": "pips", "decimals": 5
+    },
+    "GBP/JPY": {
+        "name": "GBP/JPY (Ninja Cent)",
+        "trend_sl": 0.45,    "trend_tp": 0.90,
+        "scalp_sl": 0.22,    "scalp_tp": 0.40,
+        "contract_size": 1.0, "pip_factor": 100,   "unit": "pips", "decimals": 3
+    },
+    
+    # --- CRYPTO ASSETS ---
+    "BTC/USD": {
+        "name": "BTC/USD (Bitcoin Cent)",
+        "trend_sl": 1200.00, "trend_tp": 2400.00,
+        "scalp_sl": 600.00,  "scalp_tp": 1000.00,
+        "contract_size": 1.0, "pip_factor": 1,   "unit": "points", "decimals": 2
+    },
+    "ETH/USD": {
+        "name": "ETH/USD (Ethereum Cent)",
+        "trend_sl": 80.00,   "trend_tp": 160.00,
+        "scalp_sl": 40.00,   "scalp_tp": 70.00,
+        "contract_size": 1.0, "pip_factor": 1,   "unit": "points", "decimals": 2
+    },
+    "SOL/USD": {
+        "name": "SOL/USD (Solana Cent)",
+        "trend_sl": 5.00,    "trend_tp": 10.00,
+        "scalp_sl": 2.50,    "scalp_tp": 4.50,
+        "contract_size": 1.0, "pip_factor": 1,   "unit": "points", "decimals": 2
+    },
+    "XRP/USD": {
+        "name": "XRP/USD (Ripple Cent)",
+        "trend_sl": 0.03,    "trend_tp": 0.06,
+        "scalp_sl": 0.015,   "scalp_tp": 0.025,
+        "contract_size": 1.0, "pip_factor": 10000, "unit": "pips", "decimals": 4
+    },
+
+    # --- COMMODITIES ---
+    "XAU/USD": {
+        "name": "XAU/USD (Gold Cent)",
+        "trend_sl": 3.50,    "trend_tp": 7.00,
+        "scalp_sl": 2.00,    "scalp_tp": 3.00,
+        "contract_size": 1.0, "pip_factor": 100, "unit": "pips", "decimals": 2
+    }
 }
 
-LIVE_MARKET_CACHE = {
-    "XAU/USD": None,
-    "BTC/USD": None,
-    "EUR/USD": None
-}
+# Global Memory State & Live Cache initialized dynamically from ASSET_SPECS
+LAST_SIGNALS = {symbol: None for symbol in ASSET_SPECS.keys()}
+LIVE_MARKET_CACHE = {symbol: None for symbol in ASSET_SPECS.keys()}
 
 # --- DATABASE PERSISTENCE (SQLite) ---
 
@@ -94,16 +160,38 @@ def get_all_active_chat_ids():
 
 init_db()
 
-# --- PROFESSIONAL DASHBOARD KEYBOARDS ---
+# --- PROFESSIONAL CATEGORY KEYBOARDS ---
 
 def get_main_dashboard():
     markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    btn_gold = KeyboardButton("📈 XAUUSDc (Gold)")
-    btn_btc = KeyboardButton("📉 BTCUSDc (Bitcoin)")
-    btn_eur = KeyboardButton("📊 EURUSDc (Forex)")
+    btn_forex = KeyboardButton("📊 Forex Markets (Top 6)")
+    btn_crypto = KeyboardButton("🪙 Crypto Assets")
+    btn_gold = KeyboardButton("🥇 Commodities (Gold)")
     btn_balance = KeyboardButton("💳 Configure Capital")
     btn_info = KeyboardButton("⚙️ Terminal Diagnostics")
-    markup.add(btn_gold, btn_btc, btn_eur, btn_balance, btn_info)
+    markup.add(btn_forex, btn_crypto, btn_gold, btn_balance, btn_info)
+    return markup
+
+def get_forex_submenu():
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("EUR/USD", callback_data="select_EUR/USD"),
+        InlineKeyboardButton("GBP/USD", callback_data="select_GBP/USD"),
+        InlineKeyboardButton("USD/JPY", callback_data="select_USD/JPY"),
+        InlineKeyboardButton("AUD/USD", callback_data="select_AUD/USD"),
+        InlineKeyboardButton("USD/CAD", callback_data="select_USD/CAD"),
+        InlineKeyboardButton("GBP/JPY", callback_data="select_GBP/JPY")
+    )
+    return markup
+
+def get_crypto_submenu():
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("BTC/USD", callback_data="select_BTC/USD"),
+        InlineKeyboardButton("ETH/USD", callback_data="select_ETH/USD"),
+        InlineKeyboardButton("SOL/USD", callback_data="select_SOL/USD"),
+        InlineKeyboardButton("XRP/USD", callback_data="select_XRP/USD")
+    )
     return markup
 
 def get_balance_presets():
@@ -124,28 +212,6 @@ def parse_raw_amount(text):
         return val if val > 0 else None
     except ValueError:
         return None
-
-# --- ASSET SPECS FOR CENT ACCOUNTS ---
-ASSET_SPECS = {
-    "XAU/USD": {
-        "name": "GOLD CENT (XAUUSDc)",
-        "trend_sl": 3.50,    "trend_tp": 7.00,
-        "scalp_sl": 2.00,    "scalp_tp": 3.00,
-        "contract_size": 1.0, "pip_factor": 100, "unit": "pips", "decimals": 2
-    },
-    "BTC/USD": {
-        "name": "BITCOIN CENT (BTCUSDc)",
-        "trend_sl": 1200.00, "trend_tp": 2400.00,
-        "scalp_sl": 600.00,  "scalp_tp": 1000.00,
-        "contract_size": 1.0, "pip_factor": 1,   "unit": "points", "decimals": 2
-    },
-    "EUR/USD": {
-        "name": "EURO CENT (EURUSDc)",
-        "trend_sl": 0.0025,  "trend_tp": 0.0050,
-        "scalp_sl": 0.0012,  "scalp_tp": 0.0020,
-        "contract_size": 1.0, "pip_factor": 10000, "unit": "pips", "decimals": 5
-    }
-}
 
 # --- TECHNICAL ANALYSIS ENGINE ---
 
@@ -198,7 +264,7 @@ def fetch_tf_data(symbol, interval):
 
 def fetch_asset_analysis(symbol):
     htf_data = fetch_tf_data(symbol, "4h")
-    time.sleep(1.5)
+    time.sleep(1.0)
     ltf_data = fetch_tf_data(symbol, "15min")
 
     if not htf_data or not ltf_data:
@@ -301,7 +367,7 @@ def generate_multi_timeframe_signal(symbol):
 # --- ⚡ INSTITUTIONAL SCANNER ENGINE ---
 
 def live_market_scanner_loop():
-    print("⚡ Institutional scanner operational across all feeds...")
+    print("⚡ Institutional scanner operational across expanded portfolio...")
     while True:
         try:
             for symbol in ASSET_SPECS.keys():
@@ -312,7 +378,7 @@ def live_market_scanner_loop():
 
                 if not sig or sig.get('is_sideways'):
                     LAST_SIGNALS[symbol] = "SIDEWAYS"
-                    time.sleep(2)
+                    time.sleep(1.5)
                     continue
 
                 signal_key = f"{sig['signal']}_{sig['trade_type']}"
@@ -352,12 +418,12 @@ def live_market_scanner_loop():
                         except Exception as send_err:
                             print(f"Failed to push alert to {chat_id}: {send_err}")
 
-                time.sleep(2)
+                time.sleep(1.5)
 
         except Exception as e:
             print(f"Scanner Loop Error: {e}")
 
-        time.sleep(60)
+        time.sleep(45)
 
 # --- TELEGRAM HANDLERS ---
 
@@ -368,8 +434,8 @@ def send_welcome(message):
         "📈 **INSTANT TRADING TERMINAL ACTIVE**\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"💳 **Assigned Capital:** `${current_bal:,.2f} USD`\n"
-        "⚡ **Engine Status:** Continuous multi-asset surveillance running.\n\n"
-        "Select an asset matrix below or configure your operational balance."
+        "⚡ **Engine Status:** Continuous multi-asset surveillance running across Forex, Crypto, & Metals.\n\n"
+        "Select a category below to browse live matrices:"
     )
     bot.send_message(message.chat.id, msg, reply_markup=get_main_dashboard(), parse_mode="Markdown")
 
@@ -417,17 +483,27 @@ def process_signal_request(message, symbol):
 
     bot.send_message(message.chat.id, card, reply_markup=markup, parse_mode="Markdown")
 
-@bot.message_handler(func=lambda msg: msg.text in ["📈 XAUUSDc (Gold)", "/gold"])
+@bot.message_handler(func=lambda msg: msg.text == "📊 Forex Markets (Top 6)")
+def handle_forex_menu(message):
+    bot.send_message(
+        message.chat.id, 
+        "📊 **Select Volatile Forex Pair:**", 
+        reply_markup=get_forex_submenu(), 
+        parse_mode="Markdown"
+    )
+
+@bot.message_handler(func=lambda msg: msg.text == "🪙 Crypto Assets")
+def handle_crypto_menu(message):
+    bot.send_message(
+        message.chat.id, 
+        "🪙 **Select Crypto Asset:**", 
+        reply_markup=get_crypto_submenu(), 
+        parse_mode="Markdown"
+    )
+
+@bot.message_handler(func=lambda msg: msg.text in ["🥇 Commodities (Gold)", "/gold"])
 def handle_gold(message):
     process_signal_request(message, "XAU/USD")
-
-@bot.message_handler(func=lambda msg: msg.text in ["📉 BTCUSDc (Bitcoin)", "/btc"])
-def handle_btc(message):
-    process_signal_request(message, "BTC/USD")
-
-@bot.message_handler(func=lambda msg: msg.text in ["📊 EURUSDc (Forex)", "/eur"])
-def handle_eur(message):
-    process_signal_request(message, "EUR/USD")
 
 @bot.message_handler(func=lambda msg: msg.text in ["💳 Configure Capital", "/setbalance"])
 def handle_balance_menu(message):
@@ -445,8 +521,8 @@ def handle_bot_info(message):
     info_text = (
         "⚙️ **System Diagnostic Matrix**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        "• **Active Feeds:** XAUUSDc, BTCUSDc, EURUSDc\n"
-        "• **Surveillance Interval:** 60-second background polling\n"
+        "• **Active Feeds:** 11 Instruments (Forex, Crypto, Metals)\n"
+        "• **Surveillance Interval:** Continuous background polling\n"
         "• **Risk Parameters:** 0.25% / 1.0% / 5.0% Exposure Tiers\n"
         f"• **Configured Capital:** `${current_bal:,.2f} USD`\n"
         "• **System Status:** Fully Operational 🟢"
@@ -465,6 +541,19 @@ def handle_raw_number_balance(message):
     )
 
 # --- INLINE CALLBACK HANDLERS ---
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('select_'))
+def handle_asset_selection_callback(call):
+    try:
+        symbol = call.data.split('_', 1)[1]
+        bot.answer_callback_query(call.id, text=f"Loading {symbol} analysis...")
+        # Create a mock message object wrapper for process_signal_request
+        class MockMessage:
+            def __init__(self, chat_id):
+                self.chat = type('obj', (object,), {'id': chat_id})
+        process_signal_request(MockMessage(call.message.chat.id), symbol)
+    except Exception as e:
+        print(f"Asset selection callback error: {e}")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('setbal_'))
 def handle_preset_balance(call):
@@ -524,7 +613,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Institutional Sniper Terminal is active and operational."
+    return "Institutional Multi-Asset Sniper Terminal is active and operational."
 
 if __name__ == "__main__":
     bot_thread = threading.Thread(target=run_bot)
