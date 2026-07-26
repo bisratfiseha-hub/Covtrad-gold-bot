@@ -160,16 +160,21 @@ def get_all_active_chat_ids():
 
 init_db()
 
-# --- BETA 1.0 STYLE CLEAN REPLY DASHBOARD ---
+# --- PROFESSIONAL DASHBOARD LAYOUT ---
 
 def get_main_dashboard():
     markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    btn_overview = KeyboardButton("📊 Full Market Overview (11 Assets)")
     btn_gold = KeyboardButton("🥇 Gold (XAUUSDc)")
     btn_forex = KeyboardButton("📊 Forex Markets (Top 6)")
     btn_crypto = KeyboardButton("🪙 Crypto Assets")
     btn_balance = KeyboardButton("💳 Configure Capital")
     btn_info = KeyboardButton("⚙️ Terminal Diagnostics")
-    markup.add(btn_gold, btn_forex, btn_crypto, btn_balance, btn_info)
+    
+    markup.add(btn_overview)
+    markup.add(btn_gold, btn_forex)
+    markup.add(btn_crypto, btn_balance)
+    markup.add(btn_info)
     return markup
 
 def get_forex_submenu():
@@ -331,6 +336,11 @@ def generate_multi_timeframe_signal(symbol):
     else:
         return {
             "is_sideways": True,
+            "symbol": symbol,
+            "name": spec['name'],
+            "price": price,
+            "htf_bias": htf_bias,
+            "spec": spec,
             "text": (
                 f"📊 **MARKET PROFILE — {spec['name']}**\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -437,9 +447,62 @@ def send_welcome(message):
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"💳 **Assigned Capital:** `${current_bal:,.2f} USD`\n"
         "⚡ **Engine Status:** Live surveillance running across Forex, Crypto, & Metals.\n\n"
-        "Select an option below:"
+        "Select a dashboard module below:"
     )
     bot.send_message(message.chat.id, msg, reply_markup=get_main_dashboard(), parse_mode="Markdown")
+
+@bot.message_handler(func=lambda msg: msg.text == "📊 Full Market Overview (11 Assets)")
+def handle_full_market_overview(message):
+    bot.send_chat_action(message.chat.id, 'typing')
+    
+    gold_keys = ["XAU/USD"]
+    forex_keys = ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "GBP/JPY"]
+    crypto_keys = ["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD"]
+    
+    overview_text = (
+        "📊 **INSTITUTIONAL MULTI-ASSET SNAPSHOT**\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    )
+    
+    overview_text += "🥇 **Commodities & Metals:**\n"
+    for sym in gold_keys:
+        cached = LIVE_MARKET_CACHE.get(sym)
+        spec = ASSET_SPECS[sym]
+        if cached:
+            bias = cached.get('htf_bias', 'NEUTRAL')
+            price = cached.get('price', 0.0)
+            overview_text += f"• `{sym}`: `{price:,.{spec['decimals']}f}` | {bias}\n"
+        else:
+            overview_text += f"• `{sym}`: *Syncing data...*\n"
+            
+    overview_text += "\n📊 **Forex Majors:**\n"
+    for sym in forex_keys:
+        cached = LIVE_MARKET_CACHE.get(sym)
+        spec = ASSET_SPECS[sym]
+        if cached:
+            bias = cached.get('htf_bias', 'NEUTRAL')
+            price = cached.get('price', 0.0)
+            overview_text += f"• `{sym}`: `{price:,.{spec['decimals']}f}` | {bias}\n"
+        else:
+            overview_text += f"• `{sym}`: *Syncing data...*\n"
+
+    overview_text += "\n🪙 **Crypto Assets:**\n"
+    for sym in crypto_keys:
+        cached = LIVE_MARKET_CACHE.get(sym)
+        spec = ASSET_SPECS[sym]
+        if cached:
+            bias = cached.get('htf_bias', 'NEUTRAL')
+            price = cached.get('price', 0.0)
+            overview_text += f"• `{sym}`: `{price:,.{spec['decimals']}f}` | {bias}\n"
+        else:
+            overview_text += f"• `{sym}`: *Syncing data...*\n"
+
+    overview_text += (
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "💡 *Tap any asset category below to instantly generate a trade setup and risk matrix.*"
+    )
+    
+    bot.send_message(message.chat.id, overview_text, reply_markup=get_main_dashboard(), parse_mode="Markdown")
 
 def process_signal_request(message, symbol):
     bot.send_chat_action(message.chat.id, 'typing')
