@@ -1,4 +1,6 @@
 import os
+import re
+import sqlite3
 import threading
 import requests
 from flask import Flask
@@ -14,9 +16,9 @@ from telebot.types import (
 BOT_TOKEN = os.environ.get('BOT_TOKEN', 'YOUR_TELEGRAM_BOT_TOKEN_HERE')
 TWELVE_DATA_KEY = os.environ.get('TWELVE_DATA_API_KEY', '')
 
-DEFAULT_BALANCE = 5000.0
+DEFAULT_BALANCE = 50.0
 DEFAULT_RISK_PCT = 1.0
-USER_BALANCES = {}
+DB_NAME = "bot_data.db"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -26,10 +28,56 @@ try:
 except Exception as e:
     print(f"Webhook reset notice: {e}")
 
-# --- PERSISTENT KEYBOARD DASHBOARD ---
+# --- DATABASE PERSISTENCE (SQLite) ---
+
+def init_db():
+    """Initializes SQLite table for storing user balances across reboots"""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_balances (
+            chat_id INTEGER PRIMARY KEY,
+            balance REAL NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+def get_user_balance(chat_id):
+    """Retrieves saved user balance from database or returns default"""
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("SELECT balance FROM user_balances WHERE chat_id = ?", (chat_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row else DEFAULT_BALANCE
+    except Exception as e:
+        print(f"DB Read Error: {e}")
+        return DEFAULT_BALANCE
+
+def set_user_balance(chat_id, balance):
+    """Saves user balance persistently to SQLite database"""
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO user_balances (chat_id, balance)
+            VALUES (?, ?)
+            ON CONFLICT(chat_id) DO UPDATE SET balance = excluded.balance
+        """, (chat_id, balance))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"DB Write Error: {e}")
+
+# Initialize Database
+init_db()
+
+# --- PERSISTENT KEYBOARD DASHBOARD & PRESETS ---
 
 def get_main_dashboard():
-    """Generates persistent clickable menu buttons at the bottom of Telegram"""
+    """Generates persistent bottom menu keyboard"""
     markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     btn_signal = KeyboardButton("📊 Get Gold Signal")
     btn_balance = KeyboardButton("💰 Set Balance")
@@ -38,14 +86,25 @@ def get_main_dashboard():
     return markup
 
 def get_balance_presets():
-    """Generates inline buttons for quick balance selection"""
-    markup = InlineKeyboardMarkup(row_width=2)
-    b1 = InlineKeyboardButton("$1,000", callback_data="setbal_1000")
-    b2 = InlineKeyboardButton("$2,500", callback_data="setbal_2500")
-    b3 = InlineKeyboardButton("$5,000", callback_data="setbal_5000")
-    b4 = InlineKeyboardButton("$10,000", callback_data="setbal_10000")
-    markup.add(b1, b2, b3, b4)
+    """Generates updated micro/small account balance presets"""
+    markup = InlineKeyboardMarkup(row_width=3)
+    b1 = InlineKeyboardButton("$20", callback_data="setbal_20")
+    b2 = InlineKeyboardButton("$25", callback_data="setbal_25")
+    b3 = InlineKeyboardButton("$50", callback_data="setbal_50")
+    b4 = InlineKeyboardButton("$100", callback_data="setbal_100")
+    b5 = InlineKeyboardButton("$250", callback_data="setbal_250")
+    b6 = InlineKeyboardButton("$500", callback_data="setbal_500")
+    markup.add(b1, b2, b3, b4, b5, b6)
     return markup
+
+def parse_raw_amount(text):
+    """Extracts numeric float value from text (e.g. '$56.59' -> 56.59)"""
+    cleaned = text.replace('$', '').replace(',', '').strip()
+    try:
+        val = float(cleaned)
+        return val if val > 0 else None
+    except ValueError:
+        return None
 
 # --- TECHNICAL ANALYSIS FETCHERS ---
 
@@ -169,22 +228,22 @@ def get_gold_signal_data():
         "note": note
     }
 
-# --- TELEGRAM COMMAND & TEXT HANDLERS ---
+# --- TELEGRAM HANDLERS ---
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    current_bal = USER_BALANCES.get(message.chat.id, DEFAULT_BALANCE)
+    current_bal = get_user_balance(message.chat.id)
     msg = (
         "🎯 **Sniper Trading Dashboard Active!**\n\n"
         f"💰 **Active Account Balance:** `${current_bal:,.2f}`\n\n"
-        "Use the buttons below to interact with the bot instantly without typing!"
+        "Use the bottom menu buttons to get live signals, or simply type your current balance (e.g. `56.59`)."
     )
     bot.send_message(message.chat.id, msg, reply_markup=get_main_dashboard(), parse_mode="Markdown")
 
 @bot.message_handler(func=lambda msg: msg.text in ["📊 Get Gold Signal", "/gold"])
 def handle_gold_request(message):
     bot.send_chat_action(message.chat.id, 'typing')
-    active_balance = USER_BALANCES.get(message.chat.id, DEFAULT_BALANCE)
+    active_balance = get_user_balance(message.chat.id)
 
     sig = get_gold_signal_data()
     if not sig:
@@ -220,17 +279,17 @@ def handle_gold_request(message):
 
 @bot.message_handler(func=lambda msg: msg.text in ["💰 Set Balance", "/setbalance"])
 def handle_balance_menu(message):
-    current_bal = USER_BALANCES.get(message.chat.id, DEFAULT_BALANCE)
+    current_bal = get_user_balance(message.chat.id)
     msg = (
         f"💰 **Account Balance Settings**\n\n"
         f"Current Balance: **${current_bal:,.2f}**\n\n"
-        "Tap a preset below or type `/setbalance <amount>` (e.g. `/setbalance 4800`):"
+        "Tap a preset button below or simply type your balance number directly (e.g. `56.59`):"
     )
     bot.send_message(message.chat.id, msg, reply_markup=get_balance_presets(), parse_mode="Markdown")
 
 @bot.message_handler(func=lambda msg: msg.text == "ℹ️ Bot Info")
 def handle_bot_info(message):
-    current_bal = USER_BALANCES.get(message.chat.id, DEFAULT_BALANCE)
+    current_bal = get_user_balance(message.chat.id)
     info_text = (
         "🤖 **Sniper Assistant Engine**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
@@ -241,19 +300,17 @@ def handle_bot_info(message):
     )
     bot.send_message(message.chat.id, info_text, reply_markup=get_main_dashboard(), parse_mode="Markdown")
 
-@bot.message_handler(commands=['setbalance'])
-def set_balance_direct(message):
-    try:
-        args = message.text.split()
-        if len(args) < 2:
-            handle_balance_menu(message)
-            return
-        
-        new_balance = float(args[1])
-        USER_BALANCES[message.chat.id] = new_balance
-        bot.send_message(message.chat.id, f"✅ Account balance saved as **${new_balance:,.2f}**!", reply_markup=get_main_dashboard(), parse_mode="Markdown")
-    except ValueError:
-        bot.send_message(message.chat.id, "⚠️ Invalid amount. Try `/setbalance 5000`.", reply_markup=get_main_dashboard())
+# --- RAW NUMBER DIRECT BALANCE HANDLER ---
+@bot.message_handler(func=lambda msg: parse_raw_amount(msg.text) is not None)
+def handle_raw_number_balance(message):
+    new_bal = parse_raw_amount(message.text)
+    set_user_balance(message.chat.id, new_bal)
+    bot.reply_to(
+        message, 
+        f"✅ Account balance updated and saved as **${new_bal:,.2f}**!", 
+        reply_markup=get_main_dashboard(), 
+        parse_mode="Markdown"
+    )
 
 # --- INLINE CALLBACK HANDLERS ---
 
@@ -261,8 +318,8 @@ def set_balance_direct(message):
 def handle_preset_balance(call):
     try:
         new_bal = float(call.data.split('_')[1])
-        USER_BALANCES[call.message.chat.id] = new_bal
-        bot.answer_callback_query(call.id, text=f"Balance set to ${new_bal:,.0f}!")
+        set_user_balance(call.message.chat.id, new_bal)
+        bot.answer_callback_query(call.id, text=f"Balance set to ${new_bal:,.2f}!")
         bot.send_message(
             call.message.chat.id, 
             f"✅ Account balance updated to **${new_bal:,.2f}**!", 
@@ -289,7 +346,7 @@ def handle_lot_calculation(call):
         ref_lot_size = ref_risk_dollars / (sl_dist * 100.0)
 
         calc_text = (
-            f"⚖️ **POSITION SIZING (${active_balance:,.0f} Account)**\n"
+            f"⚖️ **POSITION SIZING (${active_balance:,.2f} Account)**\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"• **Recommended Lot Size:** `{lot_size:.2f} Lots`\n"
             f"• **Max Risk:** -${risk_dollars:,.2f} ({risk_pct:.1f}%)\n"
