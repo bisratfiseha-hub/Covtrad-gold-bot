@@ -3,13 +3,15 @@ import threading
 import sqlite3
 import pandas as pd
 import numpy as np
-import yfinance as yf
+import requests
 import telebot
 from telebot import types
 from flask import Flask
 
 # ==================== CONFIGURATION ====================
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
+TWELVE_DATA_API_KEY = os.getenv("TWELVE_DATA_API_KEY", "YOUR_TWELVE_DATA_API_KEY")
+
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 app = Flask(__name__)
 
@@ -53,28 +55,59 @@ def update_user_setting(user_id, capital=None, risk_tier=None):
     conn.commit()
     conn.close()
 
-# Asset Ticker Mapping for yfinance
-ASSET_MAPPING = {
-    "XAU/USD": "GC=F",
-    "EUR/USD": "EURUSD=X",
-    "BTC/USD": "BTC-USD"
-}
-
-# ==================== SMC & PRICE ACTION ENGINE ====================
-def fetch_data(symbol, interval, period):
+# ==================== PROFESSIONAL API DATA FETCHING ====================
+def fetch_twelve_data(symbol, interval, outputsize=100):
+    """Fetches professional market data from Twelve Data API."""
+    url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize={outputsize}&apikey={TWELVE_DATA_API_KEY}"
     try:
-        ticker = yf.Ticker(symbol)
-        df = ticker.history(period=period, interval=interval)
-        if df.empty:
+        response = requests.get(url)
+        data = response.json()
+        if "values" not in data:
+            print(f"Twelve Data Error for {symbol}: {data}")
             return None
-        df = df[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
-        return df
+        df = pd.DataFrame(data["values"])
+        df = df.iloc[::-1].reset_index(drop=True)
+        for col in ['open', 'high', 'low', 'close']:
+            df[col] = df[col].astype(float)
+        df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close'}, inplace=True)
+        return df[['Open', 'High', 'Low', 'Close']]
     except Exception as e:
-        print(f"Error fetching data for {symbol}: {e}")
+        print(f"Error fetching Twelve Data for {symbol}: {e}")
         return None
 
+def fetch_binance_data(symbol, interval, limit=100):
+    """Fetches professional crypto data from Binance Public API."""
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    try:
+        response = requests.get(url)
+        data = response.json()
+        if not isinstance(data, list):
+            print(f"Binance Error for {symbol}: {data}")
+            return None
+        df = pd.DataFrame(data, columns=['open_time', 'Open', 'High', 'Low', 'Close', 'Volume', 'close_time', 'quote_asset_volume', 'number_of_trades', 'taker_buy_base', 'taker_buy_quote', 'ignore'])
+        for col in ['Open', 'High', 'Low', 'Close']:
+            df[col] = df[col].astype(float)
+        return df[['Open', 'High', 'Low', 'Close']]
+    except Exception as e:
+        print(f"Error fetching Binance data for {symbol}: {e}")
+        return None
+
+def fetch_market_data(asset_name, timeframe):
+    """Routes asset requests to the correct direct professional API."""
+    if asset_name == "XAU/USD":
+        interval_map = {"4h": "4h", "15m": "15min"}
+        return fetch_twelve_data("XAU/USD", interval_map.get(timeframe, "15min"))
+    elif asset_name == "EUR/USD":
+        interval_map = {"4h": "4h", "15m": "15min"}
+        return fetch_twelve_data("EUR/USD", interval_map.get(timeframe, "15min"))
+    elif asset_name == "BTC/USD":
+        interval_map = {"4h": "4h", "15m": "15m"}
+        return fetch_binance_data("BTCUSDT", interval_map.get(timeframe, "15m"))
+    return None
+
+# ==================== SMC ENGINE ====================
 def detect_market_structure(df):
-    """Detects 4H Macro Trend via Swing Highs/Lows and BOS baseline trend."""
+    """Detects 4H Macro Trend via moving average structural baseline."""
     df['SMA20'] = df['Close'].rolling(window=20).mean()
     df['SMA50'] = df['Close'].rolling(window=50).mean()
     
@@ -109,15 +142,11 @@ def detect_fvg(df_15m):
     return fvg_list, current_price
 
 def analyze_asset(asset_name, user_id):
-    ticker = ASSET_MAPPING.get(asset_name)
-    if not ticker:
-        return "Invalid Asset."
+    df_4h = fetch_market_data(asset_name, "4h")
+    df_15m = fetch_market_data(asset_name, "15m")
     
-    df_4h = fetch_data(ticker, interval="60m", period="5d")
-    df_15m = fetch_data(ticker, interval="15m", period="2d")
-    
-    if df_4h is None or df_15m is None or len(df_4h) < 50 or len(df_15m) < 20:
-        return f"⚠️ Insufficient market data retrieved for {asset_name}."
+    if df_4h is None or df_15m is None or len(df_4h) < 30 or len(df_15m) < 20:
+        return f"⚠️ API connection error or insufficient data retrieved for {asset_name}. Verify your Twelve Data API Key."
     
     macro_structure = detect_market_structure(df_4h)
     fvg_data, current_price = detect_fvg(df_15m)
@@ -137,7 +166,7 @@ def analyze_asset(asset_name, user_id):
         stop_loss = round(fvg_bottom - (current_price * 0.002), 2)
         take_profit = round(current_price + ((current_price - stop_loss) * 2.5), 2)
         reasoning = (
-            f"🏛️ **Institutional Confluence Verified**\n"
+            f"🏛️ **Institutional Confluence Verified via API**\n"
             f"* **4H Macro Structure:** Bullish Break of Structure (BOS) confirmed.\n"
             f"* **Execution Layer:** Price retraced into a verified 15M Bullish Fair Value Gap (${fvg_bottom:,.2f} - ${fvg_top:,.2f}).\n"
             f"* **Why Confirmed:** Smart money mitigated discount liquidity before upward continuation."
@@ -149,7 +178,7 @@ def analyze_asset(asset_name, user_id):
         stop_loss = round(fvg_top + (current_price * 0.002), 2)
         take_profit = round(current_price - ((stop_loss - current_price) * 2.5), 2)
         reasoning = (
-            f"🏛️ **Institutional Confluence Verified**\n"
+            f"🏛️ **Institutional Confluence Verified via API**\n"
             f"* **4H Macro Structure:** Bearish Break of Structure (BOS) confirmed.\n"
             f"* **Execution Layer:** Price retested a verified 15M Bearish Fair Value Gap (${fvg_bottom:,.2f} - ${fvg_top:,.2f}).\n"
             f"* **Why Confirmed:** Smart money swept premium liquidity before downward expansion."
@@ -165,7 +194,7 @@ def analyze_asset(asset_name, user_id):
         take_profit = 0
 
     report = (
-        f"📊 **SMC SCAN REPORT: {asset_name}**\n"
+        f"📊 **SMC API SCAN REPORT: {asset_name}**\n"
         f"------------------------------------\n"
         f"💵 **Current Price:** ${current_price:,.2f}\n"
         f"🚦 **Signal Verdict:** {signal}\n\n"
@@ -189,8 +218,8 @@ def send_welcome(message):
     markup.add(types.KeyboardButton("🔍 Scan Markets"), types.KeyboardButton("⚙️ Settings / Capital"))
     bot.send_message(
         message.chat.id,
-        "🤖 **Institutional SMC Trading Bot Initialized**\n\n"
-        "System ready with Smart Money Concepts (BOS/FVG) and automated risk calculations.",
+        "🤖 **Professional API SMC Trading Bot Initialized**\n\n"
+        "Connected to Twelve Data & Binance REST APIs with institutional SMC logic.",
         reply_markup=markup,
         parse_mode="Markdown"
     )
@@ -203,12 +232,12 @@ def asset_menu(message):
         types.InlineKeyboardButton("💶 EUR/USD", callback_data="scan_EUR/USD"),
         types.InlineKeyboardButton("₿ BTC/USD", callback_data="scan_BTC/USD")
     )
-    bot.send_message(message.chat.id, "Select an asset for deep institutional SMC scanning:", reply_markup=markup)
+    bot.send_message(message.chat.id, "Select an asset for deep professional API SMC scanning:", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("scan_"))
 def handle_scan_callback(call):
     asset = call.data.split("_")[1]
-    bot.answer_callback_query(call.id, text=f"Analyzing {asset} via SMC Engine...")
+    bot.answer_callback_query(call.id, text=f"Fetching live API feed for {asset}...")
     report = analyze_asset(asset, call.from_user.id)
     bot.send_message(call.message.chat.id, report, parse_mode="Markdown")
 
@@ -255,7 +284,7 @@ def set_risk(message):
 # ==================== FLASK KEEP-ALIVE SERVER ====================
 @app.route('/')
 def home():
-    return "SMC Trading Bot is active!"
+    return "SMC Professional API Trading Bot is active!"
 
 def run_flask():
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
@@ -265,5 +294,5 @@ if __name__ == "__main__":
     flask_thread.daemon = True
     flask_thread.start()
     
-    print("🤖 Starting Telegram Bot polling loop...")
+    print("🤖 Starting Telegram Bot polling loop with Professional APIs...")
     bot.infinity_polling()
