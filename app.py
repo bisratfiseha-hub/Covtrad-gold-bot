@@ -94,26 +94,26 @@ def get_all_active_chat_ids():
 
 init_db()
 
-# --- DASHBOARD KEYBOARDS ---
+# --- PROFESSIONAL DASHBOARD KEYBOARDS ---
 
 def get_main_dashboard():
     markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    btn_gold = KeyboardButton("🥇 Gold (XAUUSDc)")
-    btn_btc = KeyboardButton("₿ Bitcoin (BTCUSDc)")
-    btn_eur = KeyboardButton("💶 EUR/USD (EURUSDc)")
-    btn_balance = KeyboardButton("💰 Set Balance")
-    btn_info = KeyboardButton("ℹ️ Bot Info")
+    btn_gold = KeyboardButton("📈 XAUUSDc (Gold)")
+    btn_btc = KeyboardButton("📉 BTCUSDc (Bitcoin)")
+    btn_eur = KeyboardButton("📊 EURUSDc (Forex)")
+    btn_balance = KeyboardButton("💳 Configure Capital")
+    btn_info = KeyboardButton("⚙️ Terminal Diagnostics")
     markup.add(btn_gold, btn_btc, btn_eur, btn_balance, btn_info)
     return markup
 
 def get_balance_presets():
     markup = InlineKeyboardMarkup(row_width=3)
-    b1 = InlineKeyboardButton("$20", callback_data="setbal_20")
-    b2 = InlineKeyboardButton("$25", callback_data="setbal_25")
-    b3 = InlineKeyboardButton("$50", callback_data="setbal_50")
-    b4 = InlineKeyboardButton("$100", callback_data="setbal_100")
-    b5 = InlineKeyboardButton("$250", callback_data="setbal_250")
-    b6 = InlineKeyboardButton("$500", callback_data="setbal_500")
+    b1 = InlineKeyboardButton("$20 USD", callback_data="setbal_20")
+    b2 = InlineKeyboardButton("$25 USD", callback_data="setbal_25")
+    b3 = InlineKeyboardButton("$50 USD", callback_data="setbal_50")
+    b4 = InlineKeyboardButton("$100 USD", callback_data="setbal_100")
+    b5 = InlineKeyboardButton("$250 USD", callback_data="setbal_250")
+    b6 = InlineKeyboardButton("$500 USD", callback_data="setbal_500")
     markup.add(b1, b2, b3, b4, b5, b6)
     return markup
 
@@ -137,13 +137,13 @@ ASSET_SPECS = {
         "name": "BITCOIN CENT (BTCUSDc)",
         "trend_sl": 1200.00, "trend_tp": 2400.00,
         "scalp_sl": 600.00,  "scalp_tp": 1000.00,
-        "contract_size": 0.01, "pip_factor": 1,   "unit": "points", "decimals": 2
+        "contract_size": 1.0, "pip_factor": 1,   "unit": "points", "decimals": 2
     },
     "EUR/USD": {
         "name": "EURO CENT (EURUSDc)",
         "trend_sl": 0.0025,  "trend_tp": 0.0050,
         "scalp_sl": 0.0012,  "scalp_tp": 0.0020,
-        "contract_size": 1000.0, "pip_factor": 10000, "unit": "pips", "decimals": 5
+        "contract_size": 1.0, "pip_factor": 10000, "unit": "pips", "decimals": 5
     }
 }
 
@@ -217,7 +217,7 @@ def generate_multi_timeframe_signal(symbol):
     ltf = data['ltf']
 
     if 45.0 <= htf['rsi'] <= 55.0 or abs(htf['sma20'] - htf['sma50']) / price < 0.0005:
-        htf_bias = "RANGING / SIDEWAYS 🟡"
+        htf_bias = "RANGING / NEUTRAL ⚪"
     elif htf['sma20'] > htf['sma50']:
         htf_bias = "BULLISH 🟢"
     else:
@@ -227,51 +227,51 @@ def generate_multi_timeframe_signal(symbol):
     ltf_bearish = ltf['sma20'] < ltf['sma50'] and ltf['rsi'] < 50
 
     if "BULLISH" in htf_bias and ltf_bullish:
-        trade_type = "TREND CONTINUATION 🚀"
+        trade_type = "TREND CONTINUATION"
         signal = "BUY / LONG 🟢"
         sl_dist, tp_dist = spec['trend_sl'], spec['trend_tp']
-        note = "4H & 15M aligned in strong uptrend."
+        note = "Multi-timeframe structural alignment confirmed (4H & 15M)."
 
     elif "BEARISH" in htf_bias and ltf_bearish:
-        trade_type = "TREND CONTINUATION 🚀"
+        trade_type = "TREND CONTINUATION"
         signal = "SELL / SHORT 🔴"
         sl_dist, tp_dist = spec['trend_sl'], spec['trend_tp']
-        note = "4H & 15M aligned in strong downtrend."
+        note = "Multi-timeframe structural alignment confirmed (4H & 15M)."
 
     elif "BULLISH" in htf_bias and ltf_bearish:
-        trade_type = "COUNTER-TREND SCALP ⚡"
+        trade_type = "COUNTER-TREND SCALP"
         signal = "SELL / SHORT (SCALP) 🟡"
         sl_dist, tp_dist = spec['scalp_sl'], spec['scalp_tp']
-        note = "⚠️ Counter 4H Trend! Quick pullback scalp."
+        note = "Counter-trend volatility capture against 4H macro bias."
 
     elif "BEARISH" in htf_bias and ltf_bullish:
-        trade_type = "COUNTER-TREND SCALP ⚡"
+        trade_type = "COUNTER-TREND SCALP"
         signal = "BUY / LONG (SCALP) 🟡"
         sl_dist, tp_dist = spec['scalp_sl'], spec['scalp_tp']
-        note = "⚠️ Counter 4H Trend! Quick pullback scalp."
+        note = "Counter-trend volatility capture against 4H macro bias."
 
     elif "RANGING" in htf_bias and ltf_bullish:
-        trade_type = "RANGE BREAKOUT / SCALP ⚡"
+        trade_type = "RANGE BREAKOUT"
         signal = "BUY / LONG (SCALP) 🟢"
         sl_dist, tp_dist = spec['scalp_sl'], spec['scalp_tp']
-        note = "4H Consolidation with 15M momentum bullish breakout."
+        note = "Consolidation break with high-momentum 15M expansion."
 
     elif "RANGING" in htf_bias and ltf_bearish:
-        trade_type = "RANGE BREAKOUT / SCALP ⚡"
+        trade_type = "RANGE BREAKOUT"
         signal = "SELL / SHORT (SCALP) 🔴"
         sl_dist, tp_dist = spec['scalp_sl'], spec['scalp_tp']
-        note = "4H Consolidation with 15M momentum bearish breakdown."
+        note = "Consolidation break with high-momentum 15M breakdown."
 
     else:
         return {
             "is_sideways": True,
             "text": (
-                f"📊 **{spec['name']} Market Context**\n"
-                f"━━━━━━━━━━━━━━━━━━━\n"
-                f"💵 **Live Price:** {price:,.{spec['decimals']}f}\n"
-                f"🏛 **4H Macro Trend:** {htf_bias}\n"
-                f"📊 **15M RSI:** {ltf['rsi']:.1f}\n\n"
-                f"💡 **Signal:** SIDEWAYS / WAIT FOR CLEAR BREAKOUT ⏳"
+                f"📊 **MARKET PROFILE — {spec['name']}**\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"💵 **Current Price:** `{price:,.{spec['decimals']}f}`\n"
+                f"🏛 **4H Macro Context:** {htf_bias}\n"
+                f"📈 **15M Momentum (RSI):** `{ltf['rsi']:.1f}`\n\n"
+                f"⏳ **Status:** *Consolidation zone detected. Awaiting directional expansion trigger.*"
             )
         }
 
@@ -298,10 +298,10 @@ def generate_multi_timeframe_signal(symbol):
         "spec": spec
     }
 
-# --- ⚡ SCANNER ENGINE FOR ALL PAIRS ---
+# --- ⚡ INSTITUTIONAL SCANNER ENGINE ---
 
 def live_market_scanner_loop():
-    print("⚡ Instant market scanner loop running for ALL pairs!")
+    print("⚡ Institutional scanner operational across all feeds...")
     while True:
         try:
             for symbol in ASSET_SPECS.keys():
@@ -329,22 +329,22 @@ def live_market_scanner_loop():
                         active_balance = get_user_balance(chat_id)
                         
                         alert_card = (
-                            f"🚨 **INSTANT SIGNAL ALERT — {sig['name']}** 🚨\n"
-                            f"━━━━━━━━━━━━━━━━━━━\n"
-                            f"💵 **Live Price:** {sig['price']:,.{spec['decimals']}f}\n"
-                            f"🏛 **4H Macro Trend:** {sig['htf_bias']}\n"
-                            f"🏷 **Trade Type:** {sig['trade_type']}\n\n"
-                            f"💡 **Signal:** {sig['signal']}\n"
-                            f"• **Entry:** {sig['price']:,.{spec['decimals']}f}\n"
-                            f"• **Stop Loss (SL):** {sig['sl_price']:,.{spec['decimals']}f} ({pips_sl} {spec['unit']})\n"
-                            f"• **Take Profit (TP):** {sig['tp_price']:,.{spec['decimals']}f} ({pips_tp} {spec['unit']})\n\n"
-                            f"⚡ *Fresh market setup formed live! Tap below for lot size:* "
+                            f"🚨 **INSTANT TRADE BROADCAST — {sig['name']}**\n"
+                            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                            f"💵 **Live Price:** `{sig['price']:,.{spec['decimals']}f}`\n"
+                            f"🏛 **Macro Bias (4H):** {sig['htf_bias']}\n"
+                            f"🏷 **Setup Type:** `{sig['trade_type']}`\n\n"
+                            f"💡 **Directive:** {sig['signal']}\n"
+                            f"• **Entry Price:** `{sig['price']:,.{spec['decimals']}f}`\n"
+                            f"• **Stop Loss:** `{sig['sl_price']:,.{spec['decimals']}f}` *({pips_sl} {spec['unit']})*\n"
+                            f"• **Take Profit:** `{sig['tp_price']:,.{spec['decimals']}f}` *({pips_tp} {spec['unit']})*\n\n"
+                            f"⚙️ *Select institutional risk parameters below to compute execution volume:*"
                         )
 
                         markup = InlineKeyboardMarkup(row_width=3)
-                        b_low = InlineKeyboardButton("🛡 Low (0.25%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_0.25_{active_balance}")
-                        b_std = InlineKeyboardButton("⚖️ Std (1.0%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_1.0_{active_balance}")
-                        b_high = InlineKeyboardButton("🚀 High (5.0%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_5.0_{active_balance}")
+                        b_low = InlineKeyboardButton("🛡 Conservative (0.25%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_0.25_{active_balance}")
+                        b_std = InlineKeyboardButton("⚖️ Standard (1.0%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_1.0_{active_balance}")
+                        b_high = InlineKeyboardButton("🚀 Aggressive (5.0%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_5.0_{active_balance}")
                         markup.add(b_low, b_std, b_high)
 
                         try:
@@ -365,10 +365,11 @@ def live_market_scanner_loop():
 def send_welcome(message):
     current_bal = get_user_balance(message.chat.id)
     msg = (
-        "🎯 **Sniper Trading Dashboard Active (Instant Scan Mode)!**\n\n"
-        f"💰 **Active Capital:** `${current_bal:,.2f} USD`\n"
-        "⚡ **Scanner Status:** Hunting all pairs continuously for instant push alerts.\n\n"
-        "Tap any market button below for analysis, or type your balance directly (e.g. `57.59`)."
+        "📈 **INSTANT TRADING TERMINAL ACTIVE**\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"💳 **Assigned Capital:** `${current_bal:,.2f} USD`\n"
+        "⚡ **Engine Status:** Continuous multi-asset surveillance running.\n\n"
+        "Select an asset matrix below or configure your operational balance."
     )
     bot.send_message(message.chat.id, msg, reply_markup=get_main_dashboard(), parse_mode="Markdown")
 
@@ -383,7 +384,7 @@ def process_signal_request(message, symbol):
             LIVE_MARKET_CACHE[symbol] = sig
 
     if not sig:
-        bot.send_message(message.chat.id, f"⚠️ Fetching market data for {symbol}. Please try again in a few seconds.", reply_markup=get_main_dashboard())
+        bot.send_message(message.chat.id, f"⚠️ Synchronizing market feed for {symbol}. Re-attempting shortly.", reply_markup=get_main_dashboard())
         return
 
     if sig.get('is_sideways'):
@@ -395,60 +396,60 @@ def process_signal_request(message, symbol):
     pips_tp = int(sig['tp_dist'] * spec['pip_factor'])
 
     card = (
-        f"🎯 **{sig['name']} INTELLIGENT SIGNAL**\n"
-        f"━━━━━━━━━━━━━━━━━━━\n"
-        f"💵 **Live Price:** {sig['price']:,.{spec['decimals']}f}\n"
-        f"🏛 **4H Macro Trend:** {sig['htf_bias']}\n"
-        f"🏷 **Trade Type:** {sig['trade_type']}\n\n"
-        f"💡 **Signal:** {sig['signal']}\n"
-        f"• **Entry:** {sig['price']:,.{spec['decimals']}f}\n"
-        f"• **Stop Loss (SL):** {sig['sl_price']:,.{spec['decimals']}f} ({pips_sl} {spec['unit']})\n"
-        f"• **Take Profit (TP):** {sig['tp_price']:,.{spec['decimals']}f} ({pips_tp} {spec['unit']})\n\n"
-        f"📝 **Bot Context:** {sig['note']}\n\n"
-        f"👇 **Select Risk Exposure to Calculate Cent Lot Size:**"
+        f"💎 **PRO-GRADE SIGNAL MATRIX — {sig['name']}**\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"💵 **Live Price:** `{sig['price']:,.{spec['decimals']}f}`\n"
+        f"🏛 **Macro Bias (4H):** {sig['htf_bias']}\n"
+        f"🏷 **Setup Classification:** `{sig['trade_type']}`\n\n"
+        f"💡 **Directive:** {sig['signal']}\n"
+        f"• **Entry Price:** `{sig['price']:,.{spec['decimals']}f}`\n"
+        f"• **Stop Loss:** `{sig['sl_price']:,.{spec['decimals']}f}` *({pips_sl} {spec['unit']})*\n"
+        f"• **Take Profit:** `{sig['tp_price']:,.{spec['decimals']}f}` *({pips_tp} {spec['unit']})*\n\n"
+        f"📝 **Analytic Context:** {sig['note']}\n\n"
+        f"👇 **Select Risk Exposure Profile for Position Sizing:**"
     )
 
     markup = InlineKeyboardMarkup(row_width=3)
-    b_low = InlineKeyboardButton("🛡 Low (0.25%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_0.25_{active_balance}")
-    b_std = InlineKeyboardButton("⚖️ Std (1.0%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_1.0_{active_balance}")
-    b_high = InlineKeyboardButton("🚀 High (5.0%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_5.0_{active_balance}")
+    b_low = InlineKeyboardButton("🛡 Conservative (0.25%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_0.25_{active_balance}")
+    b_std = InlineKeyboardButton("⚖️ Standard (1.0%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_1.0_{active_balance}")
+    b_high = InlineKeyboardButton("🚀 Aggressive (5.0%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_5.0_{active_balance}")
     markup.add(b_low, b_std, b_high)
 
     bot.send_message(message.chat.id, card, reply_markup=markup, parse_mode="Markdown")
 
-@bot.message_handler(func=lambda msg: msg.text in ["🥇 Gold (XAUUSDc)", "/gold"])
+@bot.message_handler(func=lambda msg: msg.text in ["📈 XAUUSDc (Gold)", "/gold"])
 def handle_gold(message):
     process_signal_request(message, "XAU/USD")
 
-@bot.message_handler(func=lambda msg: msg.text in ["₿ Bitcoin (BTCUSDc)", "/btc"])
+@bot.message_handler(func=lambda msg: msg.text in ["📉 BTCUSDc (Bitcoin)", "/btc"])
 def handle_btc(message):
     process_signal_request(message, "BTC/USD")
 
-@bot.message_handler(func=lambda msg: msg.text in ["💶 EUR/USD (EURUSDc)", "/eur"])
+@bot.message_handler(func=lambda msg: msg.text in ["📊 EURUSDc (Forex)", "/eur"])
 def handle_eur(message):
     process_signal_request(message, "EUR/USD")
 
-@bot.message_handler(func=lambda msg: msg.text in ["💰 Set Balance", "/setbalance"])
+@bot.message_handler(func=lambda msg: msg.text in ["💳 Configure Capital", "/setbalance"])
 def handle_balance_menu(message):
     current_bal = get_user_balance(message.chat.id)
     msg = (
-        f"💰 **Account Balance Settings**\n\n"
-        f"Current Balance: **${current_bal:,.2f} USD**\n\n"
-        "Tap a preset button below or simply type your balance number directly (e.g. `57.59`):"
+        f"💳 **Capital Management Portal**\n\n"
+        f"Active Account Balance: **${current_bal:,.2f} USD**\n\n"
+        "Select an institutional tier below or input exact decimal value directly (e.g. `57.59`):"
     )
     bot.send_message(message.chat.id, msg, reply_markup=get_balance_presets(), parse_mode="Markdown")
 
-@bot.message_handler(func=lambda msg: msg.text == "ℹ️ Bot Info")
+@bot.message_handler(func=lambda msg: msg.text == "⚙️ Terminal Diagnostics")
 def handle_bot_info(message):
     current_bal = get_user_balance(message.chat.id)
     info_text = (
-        "🤖 **Sniper Assistant (Cent Engine)**\n"
+        "⚙️ **System Diagnostic Matrix**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        "• **Supported Pairs:** XAUUSDc, BTCUSDc, EURUSDc\n"
-        "• **Live Scanner:** 60-second continuous background loop for ALL pairs ⚡\n"
-        "• **Risk Modes:** 0.25% (Low), 1.0% (Standard), 5.0% (High Exposure)\n"
-        f"• **Active Balance:** ${current_bal:,.2f} USD\n"
-        "• **Status:** Connected & Hunting Live 24/7 🚀"
+        "• **Active Feeds:** XAUUSDc, BTCUSDc, EURUSDc\n"
+        "• **Surveillance Interval:** 60-second background polling\n"
+        "• **Risk Parameters:** 0.25% / 1.0% / 5.0% Exposure Tiers\n"
+        f"• **Configured Capital:** `${current_bal:,.2f} USD`\n"
+        "• **System Status:** Fully Operational 🟢"
     )
     bot.send_message(message.chat.id, info_text, reply_markup=get_main_dashboard(), parse_mode="Markdown")
 
@@ -458,7 +459,7 @@ def handle_raw_number_balance(message):
     set_user_balance(message.chat.id, new_bal)
     bot.reply_to(
         message, 
-        f"✅ Account balance updated and saved as **${new_bal:,.2f} USD**!", 
+        f"✅ Capital database updated successfully. Active baseline: **${new_bal:,.2f} USD**", 
         reply_markup=get_main_dashboard(), 
         parse_mode="Markdown"
     )
@@ -470,10 +471,10 @@ def handle_preset_balance(call):
     try:
         new_bal = float(call.data.split('_')[1])
         set_user_balance(call.message.chat.id, new_bal)
-        bot.answer_callback_query(call.id, text=f"Balance set to ${new_bal:,.2f} USD!")
+        bot.answer_callback_query(call.id, text=f"Capital updated to ${new_bal:,.2f} USD")
         bot.send_message(
             call.message.chat.id, 
-            f"✅ Account balance updated to **${new_bal:,.2f} USD**!", 
+            f"✅ Capital baseline reconfigured to **${new_bal:,.2f} USD**", 
             reply_markup=get_main_dashboard(), 
             parse_mode="Markdown"
         )
@@ -498,24 +499,24 @@ def handle_lot_calculation(call):
         pips_tp = int(tp_dist * spec['pip_factor'])
 
         calc_text = (
-            f"⚖️ **POSITION SIZING ({risk_pct}% RISK) — {spec['name']}**\n"
-            f"━━━━━━━━━━━━━━━━━━━\n"
-            f"• **Account Capital:** `${active_balance:,.2f} USD`\n"
-            f"• **Recommended Lot Size:** `{cent_lot_size:.2f} Cent Lots`\n"
-            f"• **Max Risk (Loss):** -${risk_dollars:,.2f} USD\n"
-            f"• **Target Reward (Win):** +${reward_dollars:,.2f} USD ({pips_tp} {spec['unit']})\n\n"
-            f"💡 *Enter `{cent_lot_size:.2f}` into your MetaTrader Cent account terminal.*"
+            f"📐 **POSITION SIZING MATRIX ({risk_pct}% RISK) — {spec['name']}**\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"• **Assigned Capital:** `${active_balance:,.2f} USD`\n"
+            f"• **Recommended Volume:** `{cent_lot_size:.2f} Cent Lots`\n"
+            f"• **Maximum Risk Exposure:** -`${risk_dollars:,.2f} USD`\n"
+            f"• **Projected Target Yield:** +`${reward_dollars:,.2f} USD` *({pips_tp} {spec['unit']})*\n\n"
+            f"💡 *Input volume `{cent_lot_size:.2f}` into your MetaTrader Cent account terminal.*"
         )
 
-        bot.answer_callback_query(call.id, text=f"Calculated for {risk_pct}% Risk!")
+        bot.answer_callback_query(call.id, text=f"Calculated for {risk_pct}% Risk Matrix")
         bot.send_message(call.message.chat.id, calc_text, parse_mode="Markdown")
 
     except Exception as e:
         print(f"Callback Error: {e}")
-        bot.answer_callback_query(call.id, text="Error calculating lot size.")
+        bot.answer_callback_query(call.id, text="Calculation error encountered.")
 
 def run_bot():
-    print("Telegram bot is listening...")
+    print("Telegram terminal online and listening...")
     bot.infinity_polling()
 
 # --- FLASK KEEP-ALIVE SERVER & THREAD LAUNCHERS ---
@@ -523,7 +524,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Sniper Bot Engine is active and hunting live!"
+    return "Institutional Sniper Terminal is active and operational."
 
 if __name__ == "__main__":
     bot_thread = threading.Thread(target=run_bot)
