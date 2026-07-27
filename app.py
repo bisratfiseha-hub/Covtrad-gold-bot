@@ -8,15 +8,16 @@ import telebot
 from telebot import types
 from flask import Flask
 
-# ==================== CONFIGURATION ====================
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
-TWELVE_DATA_API_KEY = os.getenv("TWELVE_DATA_API_KEY", "YOUR_TWELVE_DATA_API_KEY")
+# ==================== ENVIRONMENT CONFIGURATION ====================
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TWELVE_DATA_API_KEY = os.getenv("TWELVE_DATA_API_KEY", "")
 
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 app = Flask(__name__)
 
 DB_FILE = "trading_bot.db"
 
+# ==================== DATABASE ENGINE ====================
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -54,7 +55,7 @@ def update_user_setting(user_id, capital=None, risk_tier=None):
     conn.commit()
     conn.close()
 
-# ==================== PROFESSIONAL API DATA FETCHING ====================
+# ==================== LIVE MARKET DATA FETCHERS ====================
 def fetch_twelve_data(symbol, interval, outputsize=100):
     url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize={outputsize}&apikey={TWELVE_DATA_API_KEY}"
     try:
@@ -101,7 +102,7 @@ def fetch_market_data(asset_name, timeframe):
         return fetch_binance_data("BTCUSDT", interval_map.get(timeframe, "15m"))
     return None
 
-# ==================== SMC ENGINE ====================
+# ==================== SMC ANALYSIS ENGINE ====================
 def detect_market_structure(df):
     df['SMA20'] = df['Close'].rolling(window=20).mean()
     df['SMA50'] = df['Close'].rolling(window=50).mean()
@@ -152,45 +153,45 @@ def analyze_asset(asset_name, user_id):
     
     signal = "NO TRADE"
     reasoning = ""
+    stop_loss = 0
+    take_profit = 0
     
     if macro_structure == "BULLISH_BOS" and fvg_data and fvg_data[0][0] == "BULLISH_FVG":
         signal = "BUY / LONG 🟢"
         fvg_bottom = fvg_data[0][1]
         fvg_top = fvg_data[0][2]
-        stop_loss = round(fvg_bottom - (current_price * 0.002), 2)
-        take_profit = round(current_price + ((current_price - stop_loss) * 2.5), 2)
+        stop_loss = round(fvg_bottom - (current_price * 0.002), 4)
+        take_profit = round(current_price + ((current_price - stop_loss) * 2.5), 4)
         reasoning = (
-            f"🏛️ **Institutional Confluence Verified via API**\n"
+            f"🏛️ **Institutional Confluence Verified**\n"
             f"* **4H Macro Structure:** Bullish Break of Structure (BOS) confirmed.\n"
-            f"* **Execution Layer:** Price retraced into a verified 15M Bullish Fair Value Gap (${fvg_bottom:,.2f} - ${fvg_top:,.2f}).\n"
-            f"* **Why Confirmed:** Smart money mitigated discount liquidity before upward continuation."
+            f"* **Execution Layer:** Price retraced into 15M Bullish FVG ({fvg_bottom} - {fvg_top}).\n"
+            f"* **Logic:** Mitigated discount liquidity before expansion."
         )
     elif macro_structure == "BEARISH_BOS" and fvg_data and fvg_data[0][0] == "BEARISH_FVG":
         signal = "SELL / SHORT 🔴"
         fvg_bottom = fvg_data[0][1]
         fvg_top = fvg_data[0][2]
-        stop_loss = round(fvg_top + (current_price * 0.002), 2)
-        take_profit = round(current_price - ((stop_loss - current_price) * 2.5), 2)
+        stop_loss = round(fvg_top + (current_price * 0.002), 4)
+        take_profit = round(current_price - ((stop_loss - current_price) * 2.5), 4)
         reasoning = (
-            f"🏛️ **Institutional Confluence Verified via API**\n"
+            f"🏛️ **Institutional Confluence Verified**\n"
             f"* **4H Macro Structure:** Bearish Break of Structure (BOS) confirmed.\n"
-            f"* **Execution Layer:** Price retested a verified 15M Bearish Fair Value Gap (${fvg_bottom:,.2f} - ${fvg_top:,.2f}).\n"
-            f"* **Why Confirmed:** Smart money swept premium liquidity before downward expansion."
+            f"* **Execution Layer:** Price retested 15M Bearish FVG ({fvg_bottom} - {fvg_top}).\n"
+            f"* **Logic:** Swept premium liquidity before expansion."
         )
     else:
         signal = "STAND ASIDE / NO TRADE 🚫"
         reasoning = (
             f"⚠️ **Confluence Mismatch**\n"
             f"* **4H Macro Structure:** {macro_structure}\n"
-            f"* **Why Rejected:** Price action lacks clean institutional alignment between macro structure and execution imbalances."
+            f"* **Status:** Market lacks clean institutional alignment."
         )
-        stop_loss = 0
-        take_profit = 0
 
     report = (
         f"📊 **SMC API SCAN REPORT: {asset_name}**\n"
         f"------------------------------------\n"
-        f"💵 **Current Price:** ${current_price:,.2f}\n"
+        f"💵 **Current Price:** {current_price}\n"
         f"🚦 **Signal Verdict:** {signal}\n\n"
         f"{reasoning}\n\n"
         f"🛡️ **Risk & Capital Management**\n"
@@ -199,41 +200,47 @@ def analyze_asset(asset_name, user_id):
     )
     if signal != "STAND ASIDE / NO TRADE 🚫":
         report += (
-            f"* **Suggested Stop Loss:** ${stop_loss:,.2f}\n"
-            f"* **Suggested Take Profit (2.5R):** ${take_profit:,.2f}\n"
+            f"* **Suggested Stop Loss:** {stop_loss}\n"
+            f"* **Suggested Take Profit (2.5R):** {take_profit}\n"
         )
     
     return report
 
-# ==================== TELEGRAM BOT INTERFACE ====================
+# ==================== TELEGRAM UI ROUTING ====================
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    markup.add(types.KeyboardButton("🔍 Scan Markets"), types.KeyboardButton("⚙️ Settings / Capital"))
+    markup.add(
+        types.KeyboardButton("🥇 XAU/USD"),
+        types.KeyboardButton("💶 EUR/USD"),
+        types.KeyboardButton("₿ BTC/USD"),
+        types.KeyboardButton("⚙️ Settings / Capital")
+    )
     bot.send_message(
         message.chat.id,
-        "🤖 **Professional API SMC Trading Bot (Beta 2.0)**\n\n"
-        "Connected to Twelve Data & Binance REST APIs with institutional SMC logic and webhook auto-clearance.",
+        "🤖 **COVTRADER Beta 2.0 Online**\n\n"
+        "Tap any asset below for live institutional SMC scanning:",
         reply_markup=markup,
         parse_mode="Markdown"
     )
 
-@bot.message_handler(func=lambda msg: msg.text == "🔍 Scan Markets")
-def asset_menu(message):
-    markup = types.InlineKeyboardMarkup(row_width=3)
-    markup.add(
-        types.InlineKeyboardButton("🥇 XAU/USD", callback_data="scan_XAU/USD"),
-        types.InlineKeyboardButton("💶 EUR/USD", callback_data="scan_EUR/USD"),
-        types.InlineKeyboardButton("₿ BTC/USD", callback_data="scan_BTC/USD")
-    )
-    bot.send_message(message.chat.id, "Select an asset for deep professional API SMC scanning:", reply_markup=markup)
+@bot.message_handler(func=lambda msg: msg.text == "🥇 XAU/USD")
+def scan_gold(message):
+    bot.send_message(message.chat.id, "Scanning live feed for XAU/USD...", parse_mode="Markdown")
+    report = analyze_asset("XAU/USD", message.from_user.id)
+    bot.send_message(message.chat.id, report, parse_mode="Markdown")
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("scan_"))
-def handle_scan_callback(call):
-    asset = call.data.split("_")[1]
-    bot.answer_callback_query(call.id, text=f"Fetching live API feed for {asset}...")
-    report = analyze_asset(asset, call.from_user.id)
-    bot.send_message(call.message.chat.id, report, parse_mode="Markdown")
+@bot.message_handler(func=lambda msg: msg.text == "💶 EUR/USD")
+def scan_eur(message):
+    bot.send_message(message.chat.id, "Scanning live feed for EUR/USD...", parse_mode="Markdown")
+    report = analyze_asset("EUR/USD", message.from_user.id)
+    bot.send_message(message.chat.id, report, parse_mode="Markdown")
+
+@bot.message_handler(func=lambda msg: msg.text == "₿ BTC/USD")
+def scan_btc(message):
+    bot.send_message(message.chat.id, "Scanning live feed for BTC/USD...", parse_mode="Markdown")
+    report = analyze_asset("BTC/USD", message.from_user.id)
+    bot.send_message(message.chat.id, report, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda msg: msg.text == "⚙️ Settings / Capital")
 def settings_menu(message):
@@ -243,9 +250,9 @@ def settings_menu(message):
         f"⚙️ **Account Configuration**\n"
         f"* **Capital:** ${settings['capital']:,.2f}\n"
         f"* **Risk Per Trade:** {settings['risk_tier']}%\n\n"
-        f"Commands:\n"
-        f"• `/capital [amount]` (e.g. `/capital 2000`)\n"
-        f"• `/risk [percentage]` (e.g. `/risk 1.0` or `/risk 0.25`)",
+        f"Update commands:\n"
+        f"• `/capital 1500`\n"
+        f"• `/risk 1.0`",
         parse_mode="Markdown"
     )
 
@@ -271,14 +278,14 @@ def set_risk(message):
             return
         new_risk = float(parts[1])
         update_user_setting(message.from_user.id, risk_tier=new_risk)
-        bot.reply_to(message, f"✅ Risk per trade updated to **{new_risk}%**.", parse_mode="Markdown")
+        bot.reply_to(message, f"✅ Risk updated to **{new_risk}%**.", parse_mode="Markdown")
     except ValueError:
         bot.reply_to(message, "Invalid risk format.")
 
-# ==================== FLASK KEEP-ALIVE SERVER ====================
+# ==================== KEEP-ALIVE SERVER ====================
 @app.route('/')
 def home():
-    return "SMC Professional API Trading Bot Beta 2.0 is active!"
+    return "SMC Professional API Trading Bot Beta 2.0 is live!"
 
 def run_flask():
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
@@ -288,9 +295,6 @@ if __name__ == "__main__":
     flask_thread.daemon = True
     flask_thread.start()
     
-    print("🤖 Starting Telegram Bot polling loop with Professional APIs...")
-    
-    # Clears any conflicting webhooks so the bot responds immediately
+    print("🤖 Launching Telegram Bot...")
     bot.remove_webhook()
-    
     bot.infinity_polling()
