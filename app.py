@@ -319,7 +319,7 @@ def send_welcome(message):
         "📈 **INSTANT TRADING TERMINAL ACTIVE**\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"💳 **Assigned Capital:** `${current_bal:,.2f} USD`\n"
-        "⚡ **Engine Status:** Beta 2.0 Strict Confluence Active.\n\n"
+        "⚡ **Engine Status:** Strict Confluence Filtering Enabled.\n\n"
         "Select an asset category below:"
     )
     bot.send_message(message.chat.id, msg, reply_markup=get_main_dashboard(), parse_mode="Markdown")
@@ -348,7 +348,7 @@ def process_signal_request(message, symbol):
     pips_tp = int(sig['tp_dist'] * spec['pip_factor'])
 
     card = (
-        f"💎 **BETA 2.0 SIGNAL MATRIX — {sig['name']}**\n"
+        f"💎 **PRO-GRADE SIGNAL MATRIX — {sig['name']}**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"⏱ **Timeframe Matrix:** `4H (Macro) & 15M (Execution)`\n"
         f"💵 **Current Market Price:** `{sig['price']:,.{spec['decimals']}f}`\n"
@@ -406,7 +406,7 @@ def handle_balance_menu(message):
 def handle_bot_info(message):
     current_bal = get_user_balance(message.chat.id)
     info_text = (
-        "⚙️ **System Diagnostic Matrix (Beta 2.0)**\n"
+        "⚙️ **System Diagnostic Matrix**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "• **Active Feeds:** 11 Instruments (Forex, Crypto, Metals)\n"
         "• **Surveillance Mode:** On-Demand with Confluence Filtering\n"
@@ -499,7 +499,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Beta 2.0 Institutional Multi-Asset Sniper Terminal is active and operational."
+    return "Institutional Multi-Asset Sniper Terminal is active and operational."
 
 if __name__ == "__main__":
     bot_thread = threading.Thread(target=run_bot)
