@@ -1,299 +1,592 @@
 import os
-import threading
+import time
 import sqlite3
-import pandas as pd
-import numpy as np
+import threading
 import requests
-import telebot
-from telebot import types
 from flask import Flask
+import telebot
+from telebot.types import (
+    InlineKeyboardMarkup, 
+    InlineKeyboardButton, 
+    ReplyKeyboardMarkup, 
+    KeyboardButton
+)
 
-# ==================== CONFIGURATION ====================
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
-TWELVE_DATA_API_KEY = os.getenv("TWELVE_DATA_API_KEY", "YOUR_TWELVE_DATA_API_KEY")
+# --- CONFIGURATION & ENV VARIABLES ---
+BOT_TOKEN = os.environ.get('BOT_TOKEN', 'YOUR_TELEGRAM_BOT_TOKEN_HERE')
+TWELVE_DATA_KEY = os.environ.get('TWELVE_DATA_API_KEY', '')
 
-bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
-app = Flask(__name__)
+DEFAULT_BALANCE = 50.0
+DB_NAME = "bot_data.db"
 
-DB_FILE = "trading_bot.db"
+bot = telebot.TeleBot(BOT_TOKEN)
+
+try:
+    bot.remove_webhook()
+    print("Old webhook cleared successfully!")
+except Exception as e:
+    print(f"Webhook reset notice: {e}")
+
+# --- TOP 3 BENCHMARK ASSETS ---
+TOP_3_PAIRS = ["XAU/USD", "EUR/USD", "BTC/USD"]
+
+# --- ASSET SPECS FOR CENT ACCOUNTS ---
+ASSET_SPECS = {
+    "EUR/USD": {
+        "name": "EUR/USD (Euro Cent)",
+        "trend_sl": 0.0025,  "trend_tp": 0.0050,
+        "contract_size": 1.0, "pip_factor": 10000, "unit": "pips", "decimals": 5
+    },
+    "GBP/USD": {
+        "name": "GBP/USD (Cable Cent)",
+        "trend_sl": 0.0030,  "trend_tp": 0.0060,
+        "contract_size": 1.0, "pip_factor": 10000, "unit": "pips", "decimals": 5
+    },
+    "USD/JPY": {
+        "name": "USD/JPY (Yen Cent)",
+        "trend_sl": 0.35,    "trend_tp": 0.70,
+        "contract_size": 1.0, "pip_factor": 100,   "unit": "pips", "decimals": 3
+    },
+    "AUD/USD": {
+        "name": "AUD/USD (Aussie Cent)",
+        "trend_sl": 0.0025,  "trend_tp": 0.0050,
+        "contract_size": 1.0, "pip_factor": 10000, "unit": "pips", "decimals": 5
+    },
+    "USD/CAD": {
+        "name": "USD/CAD (Loonie Cent)",
+        "trend_sl": 0.0025,  "trend_tp": 0.0050,
+        "contract_size": 1.0, "pip_factor": 10000, "unit": "pips", "decimals": 5
+    },
+    "GBP/JPY": {
+        "name": "GBP/JPY (Ninja Cent)",
+        "trend_sl": 0.45,    "trend_tp": 0.90,
+        "contract_size": 1.0, "pip_factor": 100,   "unit": "pips", "decimals": 3
+    },
+    "BTC/USD": {
+        "name": "BTC/USD (Bitcoin Cent)",
+        "trend_sl": 1200.00, "trend_tp": 2400.00,
+        "contract_size": 1.0, "pip_factor": 1,   "unit": "points", "decimals": 2
+    },
+    "ETH/USD": {
+        "name": "ETH/USD (Ethereum Cent)",
+        "trend_sl": 80.00,   "trend_tp": 160.00,
+        "contract_size": 1.0, "pip_factor": 1,   "unit": "points", "decimals": 2
+    },
+    "SOL/USD": {
+        "name": "SOL/USD (Solana Cent)",
+        "trend_sl": 5.00,    "trend_tp": 10.00,
+        "contract_size": 1.0, "pip_factor": 1,   "unit": "points", "decimals": 2
+    },
+    "XRP/USD": {
+        "name": "XRP/USD (Ripple Cent)",
+        "trend_sl": 0.03,    "trend_tp": 0.06,
+        "contract_size": 1.0, "pip_factor": 10000, "unit": "pips", "decimals": 4
+    },
+    "XAU/USD": {
+        "name": "XAU/USD (Gold Cent)",
+        "trend_sl": 3.50,    "trend_tp": 7.00,
+        "contract_size": 1.0, "pip_factor": 100, "unit": "pips", "decimals": 2
+    }
+}
+
+# --- DATABASE PERSISTENCE (SQLite) ---
 
 def init_db():
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS user_settings (
-            user_id INTEGER PRIMARY KEY,
-            capital REAL DEFAULT 1000.0,
-            risk_tier REAL DEFAULT 1.0
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_balances (
+            chat_id INTEGER PRIMARY KEY,
+            balance REAL NOT NULL
         )
-    ''')
+    """)
     conn.commit()
     conn.close()
+
+def get_user_balance(chat_id):
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("SELECT balance FROM user_balances WHERE chat_id = ?", (chat_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row else DEFAULT_BALANCE
+    except Exception as e:
+        print(f"DB Read Error: {e}")
+        return DEFAULT_BALANCE
+
+def set_user_balance(chat_id, balance):
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO user_balances (chat_id, balance)
+            VALUES (?, ?)
+            ON CONFLICT(chat_id) DO UPDATE SET balance = excluded.balance
+        """, (chat_id, balance))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"DB Write Error: {e}")
 
 init_db()
 
-def get_user_settings(user_id):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT capital, risk_tier FROM user_settings WHERE user_id = ?", (user_id,))
-    row = cursor.fetchone()
-    if not row:
-        cursor.execute("INSERT INTO user_settings (user_id, capital, risk_tier) VALUES (?, 1000.0, 1.0)", (user_id,))
-        conn.commit()
-        row = (1000.0, 1.0)
-    conn.close()
-    return {"capital": row[0], "risk_tier": row[1]}
+# --- DASHBOARD LAYOUT WITH NEW BUTTONS ---
 
-def update_user_setting(user_id, capital=None, risk_tier=None):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    settings = get_user_settings(user_id)
-    new_cap = capital if capital is not None else settings["capital"]
-    new_risk = risk_tier if risk_tier is not None else settings["risk_tier"]
-    cursor.execute("REPLACE INTO user_settings (user_id, capital, risk_tier) VALUES (?, ?, ?)", (user_id, new_cap, new_risk))
-    conn.commit()
-    conn.close()
+def get_main_dashboard():
+    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    btn_gold = KeyboardButton("🥇 Gold (XAUUSDc)")
+    btn_scan_top3 = KeyboardButton("⚡ Instant Market Scan (Top 3)")
+    btn_overview = KeyboardButton("🌐 Total Overview (Top 3)")
+    btn_forex = KeyboardButton("📊 Forex Markets (Top 6)")
+    btn_crypto = KeyboardButton("🪙 Crypto Assets")
+    btn_balance = KeyboardButton("💳 Configure Capital")
+    btn_info = KeyboardButton("⚙️ Terminal Diagnostics")
+    markup.add(btn_gold, btn_scan_top3, btn_overview, btn_forex, btn_crypto, btn_balance, btn_info)
+    return markup
 
-# ==================== PROFESSIONAL API DATA FETCHING ====================
-def fetch_twelve_data(symbol, interval, outputsize=100):
-    url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize={outputsize}&apikey={TWELVE_DATA_API_KEY}"
-    try:
-        response = requests.get(url, timeout=10)
-        data = response.json()
-        if "values" not in data:
-            print(f"Twelve Data Error for {symbol}: {data}")
-            return None
-        df = pd.DataFrame(data["values"])
-        df = df.iloc[::-1].reset_index(drop=True)
-        for col in ['open', 'high', 'low', 'close']:
-            df[col] = df[col].astype(float)
-        df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close'}, inplace=True)
-        return df[['Open', 'High', 'Low', 'Close']]
-    except Exception as e:
-        print(f"Error fetching Twelve Data for {symbol}: {e}")
-        return None
-
-def fetch_binance_data(symbol, interval, limit=100):
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
-    try:
-        response = requests.get(url, timeout=10)
-        data = response.json()
-        if not isinstance(data, list):
-            print(f"Binance Error for {symbol}: {data}")
-            return None
-        df = pd.DataFrame(data, columns=['open_time', 'Open', 'High', 'Low', 'Close', 'Volume', 'close_time', 'quote_asset_volume', 'number_of_trades', 'taker_buy_base', 'taker_buy_quote', 'ignore'])
-        for col in ['Open', 'High', 'Low', 'Close']:
-            df[col] = df[col].astype(float)
-        return df[['Open', 'High', 'Low', 'Close']]
-    except Exception as e:
-        print(f"Error fetching Binance data for {symbol}: {e}")
-        return None
-
-def fetch_market_data(asset_name, timeframe):
-    if asset_name == "XAU/USD":
-        interval_map = {"4h": "4h", "15m": "15min"}
-        return fetch_twelve_data("XAU/USD", interval_map.get(timeframe, "15min"))
-    elif asset_name == "EUR/USD":
-        interval_map = {"4h": "4h", "15m": "15min"}
-        return fetch_twelve_data("EUR/USD", interval_map.get(timeframe, "15min"))
-    elif asset_name == "BTC/USD":
-        interval_map = {"4h": "4h", "15m": "15m"}
-        return fetch_binance_data("BTCUSDT", interval_map.get(timeframe, "15m"))
-    return None
-
-# ==================== SMC ENGINE ====================
-def detect_market_structure(df):
-    df['SMA20'] = df['Close'].rolling(window=20).mean()
-    df['SMA50'] = df['Close'].rolling(window=50).mean()
-    
-    last_close = df['Close'].iloc[-1]
-    sma20 = df['SMA20'].iloc[-1]
-    sma50 = df['SMA50'].iloc[-1]
-    
-    if sma20 > sma50 and last_close > sma20:
-        return "BULLISH_BOS"
-    elif sma20 < sma50 and last_close < sma20:
-        return "BEARISH_BOS"
-    else:
-        return "RANGING"
-
-def detect_fvg(df_15m):
-    fvg_list = []
-    for i in range(len(df_15m) - 1, 2, -1):
-        c1_high = df_15m['High'].iloc[i-2]
-        c3_low = df_15m['Low'].iloc[i]
-        c1_low = df_15m['Low'].iloc[i-2]
-        c3_high = df_15m['High'].iloc[i]
-        
-        if c3_low > c1_high:
-            fvg_list.append(("BULLISH_FVG", c1_high, c3_low))
-            break
-        elif c3_high < c1_low:
-            fvg_list.append(("BEARISH_FVG", c3_high, c1_low))
-            break
-            
-    current_price = df_15m['Close'].iloc[-1]
-    return fvg_list, current_price
-
-def analyze_asset(asset_name, user_id):
-    df_4h = fetch_market_data(asset_name, "4h")
-    df_15m = fetch_market_data(asset_name, "15m")
-    
-    if df_4h is None or df_15m is None or len(df_4h) < 30 or len(df_15m) < 20:
-        return f"⚠️ API connection error or insufficient data for {asset_name}. Verify your Twelve Data API Key."
-    
-    macro_structure = detect_market_structure(df_4h)
-    fvg_data, current_price = detect_fvg(df_15m)
-    
-    settings = get_user_settings(user_id)
-    capital = settings["capital"]
-    risk_pct = settings["risk_tier"]
-    risk_amount = capital * (risk_pct / 100.0)
-    
-    signal = "NO TRADE"
-    reasoning = ""
-    
-    if macro_structure == "BULLISH_BOS" and fvg_data and fvg_data[0][0] == "BULLISH_FVG":
-        signal = "BUY / LONG 🟢"
-        fvg_bottom = fvg_data[0][1]
-        fvg_top = fvg_data[0][2]
-        stop_loss = round(fvg_bottom - (current_price * 0.002), 2)
-        take_profit = round(current_price + ((current_price - stop_loss) * 2.5), 2)
-        reasoning = (
-            f"🏛️ **Institutional Confluence Verified via API**\n"
-            f"* **4H Macro Structure:** Bullish Break of Structure (BOS) confirmed.\n"
-            f"* **Execution Layer:** Price retraced into a verified 15M Bullish Fair Value Gap (${fvg_bottom:,.2f} - ${fvg_top:,.2f}).\n"
-            f"* **Why Confirmed:** Smart money mitigated discount liquidity before upward continuation."
-        )
-    elif macro_structure == "BEARISH_BOS" and fvg_data and fvg_data[0][0] == "BEARISH_FVG":
-        signal = "SELL / SHORT 🔴"
-        fvg_bottom = fvg_data[0][1]
-        fvg_top = fvg_data[0][2]
-        stop_loss = round(fvg_top + (current_price * 0.002), 2)
-        take_profit = round(current_price - ((stop_loss - current_price) * 2.5), 2)
-        reasoning = (
-            f"🏛️ **Institutional Confluence Verified via API**\n"
-            f"* **4H Macro Structure:** Bearish Break of Structure (BOS) confirmed.\n"
-            f"* **Execution Layer:** Price retested a verified 15M Bearish Fair Value Gap (${fvg_bottom:,.2f} - ${fvg_top:,.2f}).\n"
-            f"* **Why Confirmed:** Smart money swept premium liquidity before downward expansion."
-        )
-    else:
-        signal = "STAND ASIDE / NO TRADE 🚫"
-        reasoning = (
-            f"⚠️ **Confluence Mismatch**\n"
-            f"* **4H Macro Structure:** {macro_structure}\n"
-            f"* **Why Rejected:** Price action lacks clean institutional alignment between macro structure and execution imbalances."
-        )
-        stop_loss = 0
-        take_profit = 0
-
-    report = (
-        f"📊 **SMC API SCAN REPORT: {asset_name}**\n"
-        f"------------------------------------\n"
-        f"💵 **Current Price:** ${current_price:,.2f}\n"
-        f"🚦 **Signal Verdict:** {signal}\n\n"
-        f"{reasoning}\n\n"
-        f"🛡️ **Risk & Capital Management**\n"
-        f"* **Account Capital:** ${capital:,.2f}\n"
-        f"* **Risk Allocation ({risk_pct}%):** ${risk_amount:,.2f}\n"
-    )
-    if signal != "STAND ASIDE / NO TRADE 🚫":
-        report += (
-            f"* **Suggested Stop Loss:** ${stop_loss:,.2f}\n"
-            f"* **Suggested Take Profit (2.5R):** ${take_profit:,.2f}\n"
-        )
-    
-    return report
-
-# ==================== TELEGRAM BOT INTERFACE ====================
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+def get_forex_submenu():
+    markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.KeyboardButton("🥇 XAU/USD"),
-        types.KeyboardButton("💶 EUR/USD"),
-        types.KeyboardButton("₿ BTC/USD"),
-        types.KeyboardButton("⚙️ Settings / Capital")
+        InlineKeyboardButton("EUR/USD", callback_data="select_EUR/USD"),
+        InlineKeyboardButton("GBP/USD", callback_data="select_GBP/USD"),
+        InlineKeyboardButton("USD/JPY", callback_data="select_USD/JPY"),
+        InlineKeyboardButton("AUD/USD", callback_data="select_AUD/USD"),
+        InlineKeyboardButton("USD/CAD", callback_data="select_USD/CAD"),
+        InlineKeyboardButton("GBP/JPY", callback_data="select_GBP/JPY")
     )
+    return markup
+
+def get_crypto_submenu():
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("BTC/USD", callback_data="select_BTC/USD"),
+        InlineKeyboardButton("ETH/USD", callback_data="select_ETH/USD"),
+        InlineKeyboardButton("SOL/USD", callback_data="select_SOL/USD"),
+        InlineKeyboardButton("XRP/USD", callback_data="select_XRP/USD")
+    )
+    return markup
+
+def get_balance_presets():
+    markup = InlineKeyboardMarkup(row_width=3)
+    b1 = InlineKeyboardButton("$20 USD", callback_data="setbal_20")
+    b2 = InlineKeyboardButton("$25 USD", callback_data="setbal_25")
+    b3 = InlineKeyboardButton("$50 USD", callback_data="setbal_50")
+    b4 = InlineKeyboardButton("$100 USD", callback_data="setbal_100")
+    b5 = InlineKeyboardButton("$250 USD", callback_data="setbal_250")
+    b6 = InlineKeyboardButton("$500 USD", callback_data="setbal_500")
+    markup.add(b1, b2, b3, b4, b5, b6)
+    return markup
+
+def parse_raw_amount(text):
+    cleaned = text.replace('$', '').replace(',', '').strip()
+    try:
+        val = float(cleaned)
+        return val if val > 0 else None
+    except ValueError:
+        return None
+
+# --- TECHNICAL ANALYSIS ENGINE ---
+
+def calculate_sma(prices, period):
+    if len(prices) < period:
+        return None
+    return sum(prices[:period]) / period
+
+def calculate_rsi(prices, period=14):
+    if len(prices) < period + 1:
+        return 50.0
+    p = prices[::-1]
+    gains = []
+    losses = []
+    for i in range(1, len(p)):
+        change = p[i] - p[i-1]
+        gains.append(max(change, 0.0))
+        losses.append(max(-change, 0.0))
+    
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+    
+    for i in range(period, len(gains)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+        
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return 100.0 - (100.0 / (1.0 + rs))
+
+def fetch_tf_data(symbol, interval):
+    if not TWELVE_DATA_KEY:
+        return None
+    try:
+        url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize=60&apikey={TWELVE_DATA_KEY}"
+        res = requests.get(url, timeout=7).json()
+        if 'values' not in res:
+            return None
+        closes = [float(item['close']) for item in res['values']]
+        
+        rsi = calculate_rsi(closes, 14)
+        sma20 = calculate_sma(closes, 20)
+        sma50 = calculate_sma(closes, 50)
+        
+        return {"rsi": rsi, "sma20": sma20, "sma50": sma50, "price": closes[0]}
+    except Exception as e:
+        print(f"Error fetching {interval} for {symbol}: {e}")
+        return None
+
+def generate_multi_timeframe_signal(symbol, profile_type="day"):
+    if profile_type == "scalp":
+        macro_tf, ltf_tf = "1h", "5min"
+        profile_label = "Scalping (1H / 5M)"
+        mult = 0.6
+    elif profile_type == "swing":
+        macro_tf, ltf_tf = "1day", "1h"
+        profile_label = "Swing Trading (Daily / 1H)"
+        mult = 2.0
+    else:  # default day trading standard (4H / 15M)
+        macro_tf, ltf_tf = "4h", "15min"
+        profile_label = "Day Trading (4H / 15M)"
+        mult = 1.0
+
+    htf_data = fetch_tf_data(symbol, macro_tf)
+    time.sleep(0.4)
+    ltf_data = fetch_tf_data(symbol, ltf_tf)
+
+    if not htf_data or not ltf_data:
+        return None
+
+    spec = ASSET_SPECS[symbol]
+    price = ltf_data['price']
+    htf = htf_data
+    ltf = ltf_data
+
+    if htf['rsi'] > 55 and htf['sma20'] > htf['sma50']:
+        htf_bias = "BULLISH 🟢"
+    elif htf['rsi'] < 45 and htf['sma20'] < htf['sma50']:
+        htf_bias = "BEARISH 🔴"
+    else:
+        htf_bias = "RANGING / CHOPPY ⚪"
+
+    ltf_bullish = ltf['sma20'] > ltf['sma50'] and ltf['rsi'] > 52
+    ltf_bearish = ltf['sma20'] < ltf['sma50'] and ltf['rsi'] < 48
+
+    sl_dist = spec['trend_sl'] * mult
+    tp_dist = spec['trend_tp'] * mult
+
+    if "BULLISH" in htf_bias and ltf_bullish:
+        trade_type = "TREND CONTINUATION"
+        signal = "BUY / LONG 🟢"
+        note = f"High Confluence: Macro & Execution aligned upward."
+    elif "BEARISH" in htf_bias and ltf_bearish:
+        trade_type = "TREND CONTINUATION"
+        signal = "SELL / SHORT 🔴"
+        note = f"High Confluence: Macro & Execution aligned downward."
+    else:
+        return {
+            "is_sideways": True,
+            "symbol": symbol,
+            "name": spec['name'],
+            "price": price,
+            "htf_bias": htf_bias,
+            "rsi": ltf['rsi'],
+            "text": (
+                f"🚫 **NO TRADE ZONE — {spec['name']}**\n"
+                f"💵 **Price:** `{price:,.{spec['decimals']}f}` | 🏛 **Macro:** {htf_bias}\n"
+                f"🛑 *Conditions conflict. Stand aside.*"
+            )
+        }
+
+    if "BUY" in signal:
+        sl_price = price - sl_dist
+        tp_price = price + tp_dist
+    else:
+        sl_price = price + sl_dist
+        tp_price = price - tp_dist
+
+    return {
+        "is_sideways": False,
+        "symbol": symbol,
+        "name": spec['name'],
+        "price": price,
+        "htf_bias": htf_bias,
+        "trade_type": trade_type,
+        "signal": signal,
+        "profile_label": profile_label,
+        "sl_price": sl_price,
+        "tp_price": tp_price,
+        "sl_dist": sl_dist,
+        "tp_dist": tp_dist,
+        "note": note,
+        "spec": spec
+    }
+
+# --- TELEGRAM HANDLERS ---
+
+@bot.message_handler(commands=['start', 'help'])
+def send_welcome(message):
+    current_bal = get_user_balance(message.chat.id)
+    msg = (
+        "📈 **INSTANT TRADING TERMINAL ACTIVE**\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"💳 **Assigned Capital:** `${current_bal:,.2f} USD`\n"
+        "⚡ **Engine Status:** 4H / 15M Institutional Standard Active.\n\n"
+        "Select an option or asset below:"
+    )
+    bot.send_message(message.chat.id, msg, reply_markup=get_main_dashboard(), parse_mode="Markdown")
+
+@bot.message_handler(func=lambda msg: msg.text == "🌐 Total Overview (Top 3)")
+def handle_total_overview(message):
+    bot.send_chat_action(message.chat.id, 'typing')
+    overview_text = "🌐 **TOTAL MARKET OVERVIEW (TOP 3 ASSETS)**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    
+    for symbol in TOP_3_PAIRS:
+        spec = ASSET_SPECS[symbol]
+        htf = fetch_tf_data(symbol, "4h")
+        time.sleep(0.3)
+        if not htf:
+            overview_text += f"• **{spec['name']}:** ⚠️ *Data feed unavailable*\n\n"
+            continue
+        
+        if htf['rsi'] > 55 and htf['sma20'] > htf['sma50']:
+            bias = "BULLISH 🟢"
+        elif htf['rsi'] < 45 and htf['sma20'] < htf['sma50']:
+            bias = "BEARISH 🔴"
+        else:
+            bias = "RANGING ⚪"
+            
+        overview_text += (
+            f"• **{spec['name']}**\n"
+            f"  💵 Price: `{htf['price']:,.{spec['decimals']}f}`\n"
+            f"  🏛 Macro Bias (4H): {bias}\n"
+            f"  📈 RSI (14): `{htf['rsi']:.1f}`\n\n"
+        )
+        
+    overview_text += "💡 *Use 'Instant Market Scan' to check actionable entry setups.*"
+    bot.send_message(message.chat.id, overview_text, reply_markup=get_main_dashboard(), parse_mode="Markdown")
+
+@bot.message_handler(func=lambda msg: msg.text == "⚡ Instant Market Scan (Top 3)")
+def handle_instant_market_scan(message):
+    bot.send_chat_action(message.chat.id, 'typing')
+    bot.send_message(message.chat.id, "⚡ **Scanning Top 3 Assets for Active Signals...**", parse_mode="Markdown")
+    
+    active_balance = get_user_balance(message.chat.id)
+    
+    for symbol in TOP_3_PAIRS:
+        sig = generate_multi_timeframe_signal(symbol, profile_type="day")
+        time.sleep(0.3)
+        
+        if not sig:
+            continue
+            
+        if sig.get('is_sideways'):
+            bot.send_message(message.chat.id, sig['text'], parse_mode="Markdown")
+            continue
+            
+        spec = sig['spec']
+        pips_sl = int(sig['sl_dist'] * spec['pip_factor'])
+        pips_tp = int(sig['tp_dist'] * spec['pip_factor'])
+
+        card = (
+            f"💎 **SIGNAL MATCH — {sig['name']}**\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"💵 **Price:** `{sig['price']:,.{spec['decimals']}f}` | {sig['htf_bias']}\n"
+            f"💡 **Directive:** {sig['signal']}\n"
+            f"• **Stop Loss:** `{sig['sl_price']:,.{spec['decimals']}f}` *({pips_sl} {spec['unit']})*\n"
+            f"• **Take Profit:** `{sig['tp_price']:,.{spec['decimals']}f}` *({pips_tp} {spec['unit']})*\n"
+        )
+
+        markup = InlineKeyboardMarkup(row_width=3)
+        b_low = InlineKeyboardButton("🛡 0.25%", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_0.25_{active_balance}")
+        b_std = InlineKeyboardButton("⚖️ 1.0%", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_1.0_{active_balance}")
+        b_high = InlineKeyboardButton("🚀 5.0%", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_5.0_{active_balance}")
+        markup.add(b_low, b_std, b_high)
+
+        bot.send_message(message.chat.id, card, reply_markup=markup, parse_mode="Markdown")
+
+    bot.send_message(message.chat.id, "✅ **Scan Complete.**", reply_markup=get_main_dashboard(), parse_mode="Markdown")
+
+@bot.message_handler(func=lambda msg: msg.text in ["🥇 Gold (XAUUSDc)", "/gold"])
+def handle_gold(message):
+    process_signal_request(message, "XAU/USD", "day")
+
+def process_signal_request(message, symbol, profile_type="day"):
+    bot.send_chat_action(message.chat.id, 'typing')
+    active_balance = get_user_balance(message.chat.id)
+
+    sig = generate_multi_timeframe_signal(symbol, profile_type)
+
+    if not sig:
+        bot.send_message(
+            message.chat.id, 
+            f"⚠️ Could not fetch data for `{symbol}`. Please check your API key or try again in a moment.", 
+            reply_markup=get_main_dashboard(), 
+            parse_mode="Markdown"
+        )
+        return
+
+    if sig.get('is_sideways'):
+        bot.send_message(message.chat.id, sig['text'], reply_markup=get_main_dashboard(), parse_mode="Markdown")
+        return
+
+    spec = sig['spec']
+    pips_sl = int(sig['sl_dist'] * spec['pip_factor'])
+    pips_tp = int(sig['tp_dist'] * spec['pip_factor'])
+
+    card = (
+        f"💎 **SIGNAL MATRIX — {sig['name']}**\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"💵 **Current Market Price:** `{sig['price']:,.{spec['decimals']}f}`\n"
+        f"🏛 **Macro Bias (4H):** {sig['htf_bias']}\n"
+        f"🏷 **Setup Classification:** `{sig['trade_type']}`\n\n"
+        f"💡 **Directive:** {sig['signal']}\n"
+        f"• **Entry Price:** `{sig['price']:,.{spec['decimals']}f}`\n"
+        f"• **Stop Loss:** `{sig['sl_price']:,.{spec['decimals']}f}` *({pips_sl} {spec['unit']})*\n"
+        f"• **Take Profit:** `{sig['tp_price']:,.{spec['decimals']}f}` *({pips_tp} {spec['unit']})*\n\n"
+        f"📝 **Analytic Context:** {sig['note']}\n\n"
+        f"👇 **Select Risk Exposure Profile for Position Sizing:**"
+    )
+
+    markup = InlineKeyboardMarkup(row_width=3)
+    b_low = InlineKeyboardButton("🛡 Conservative (0.25%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_0.25_{active_balance}")
+    b_std = InlineKeyboardButton("⚖️ Standard (1.0%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_1.0_{active_balance}")
+    b_high = InlineKeyboardButton("🚀 Aggressive (5.0%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_5.0_{active_balance}")
+    markup.add(b_low, b_std, b_high)
+
+    bot.send_message(message.chat.id, card, reply_markup=markup, parse_mode="Markdown")
+
+@bot.message_handler(func=lambda msg: msg.text == "📊 Forex Markets (Top 6)")
+def handle_forex_menu(message):
     bot.send_message(
-        message.chat.id,
-        "🤖 **Professional API SMC Trading Bot**\n\n"
-        "Select an asset below for instant institutional scanning:",
-        reply_markup=markup,
+        message.chat.id, 
+        "📊 **Select Volatile Forex Pair:**", 
+        reply_markup=get_forex_submenu(), 
         parse_mode="Markdown"
     )
 
-@bot.message_handler(func=lambda msg: msg.text == "🥇 XAU/USD")
-def scan_gold(message):
-    bot.send_message(message.chat.id, "Fetching live API feed for XAU/USD...", parse_mode="Markdown")
-    report = analyze_asset("XAU/USD", message.from_user.id)
-    bot.send_message(message.chat.id, report, parse_mode="Markdown")
-
-@bot.message_handler(func=lambda msg: msg.text == "💶 EUR/USD")
-def scan_eur(message):
-    bot.send_message(message.chat.id, "Fetching live API feed for EUR/USD...", parse_mode="Markdown")
-    report = analyze_asset("EUR/USD", message.from_user.id)
-    bot.send_message(message.chat.id, report, parse_mode="Markdown")
-
-@bot.message_handler(func=lambda msg: msg.text == "₿ BTC/USD")
-def scan_btc(message):
-    bot.send_message(message.chat.id, "Fetching live API feed for BTC/USD...", parse_mode="Markdown")
-    report = analyze_asset("BTC/USD", message.from_user.id)
-    bot.send_message(message.chat.id, report, parse_mode="Markdown")
-
-@bot.message_handler(func=lambda msg: msg.text == "⚙️ Settings / Capital")
-def settings_menu(message):
-    settings = get_user_settings(message.from_user.id)
+@bot.message_handler(func=lambda msg: msg.text == "🪙 Crypto Assets")
+def handle_crypto_menu(message):
     bot.send_message(
-        message.chat.id,
-        f"⚙️ **Account Configuration**\n"
-        f"* **Capital:** ${settings['capital']:,.2f}\n"
-        f"* **Risk Per Trade:** {settings['risk_tier']}%\n\n"
-        f"Commands:\n"
-        f"• `/capital [amount]` (e.g. `/capital 2000`)\n"
-        f"• `/risk [percentage]` (e.g. `/risk 1.0` or `/risk 0.25`)",
+        message.chat.id, 
+        "🪙 **Select Crypto Asset:**", 
+        reply_markup=get_crypto_submenu(), 
         parse_mode="Markdown"
     )
 
-@bot.message_handler(commands=['capital'])
-def set_capital(message):
-    try:
-        parts = message.text.split()
-        if len(parts) < 2:
-            bot.reply_to(message, "Usage: `/capital 1500`", parse_mode="Markdown")
-            return
-        new_cap = float(parts[1])
-        update_user_setting(message.from_user.id, capital=new_cap)
-        bot.reply_to(message, f"✅ Capital updated to **${new_cap:,.2f}**.", parse_mode="Markdown")
-    except ValueError:
-        bot.reply_to(message, "Invalid amount format.")
+@bot.message_handler(func=lambda msg: msg.text in ["💳 Configure Capital", "/setbalance"])
+def handle_balance_menu(message):
+    current_bal = get_user_balance(message.chat.id)
+    msg = (
+        f"💳 **Capital Management Portal**\n\n"
+        f"Active Account Balance: **${current_bal:,.2f} USD**\n\n"
+        "Select an institutional tier below or input exact decimal value directly (e.g. `57.59`):"
+    )
+    bot.send_message(message.chat.id, msg, reply_markup=get_balance_presets(), parse_mode="Markdown")
 
-@bot.message_handler(commands=['risk'])
-def set_risk(message):
-    try:
-        parts = message.text.split()
-        if len(parts) < 2:
-            bot.reply_to(message, "Usage: `/risk 1.0`", parse_mode="Markdown")
-            return
-        new_risk = float(parts[1])
-        update_user_setting(message.from_user.id, risk_tier=new_risk)
-        bot.reply_to(message, f"✅ Risk per trade updated to **{new_risk}%**.", parse_mode="Markdown")
-    except ValueError:
-        bot.reply_to(message, "Invalid risk format.")
+@bot.message_handler(func=lambda msg: msg.text == "⚙️ Terminal Diagnostics")
+def handle_bot_info(message):
+    current_bal = get_user_balance(message.chat.id)
+    info_text = (
+        "⚙️ **System Diagnostic Matrix**\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "• **Active Feeds:** Top 3 Benchmark + 11 Instruments\n"
+        "• **Surveillance Mode:** On-Demand 4H/15M Standard\n"
+        "• **Risk Parameters:** 0.25% / 1.0% / 5.0% Exposure Tiers\n"
+        f"• **Configured Capital:** `${current_bal:,.2f} USD`\n"
+        "• **System Status:** Fully Operational 🟢"
+    )
+    bot.send_message(message.chat.id, info_text, reply_markup=get_main_dashboard(), parse_mode="Markdown")
 
-# ==================== FLASK KEEP-ALIVE SERVER ====================
+@bot.message_handler(func=lambda msg: parse_raw_amount(msg.text) is not None)
+def handle_raw_number_balance(message):
+    new_bal = parse_raw_amount(message.text)
+    set_user_balance(message.chat.id, new_bal)
+    bot.reply_to(
+        message, 
+        f"✅ Capital database updated successfully. Active baseline: **${new_bal:,.2f} USD**", 
+        reply_markup=get_main_dashboard(), 
+        parse_mode="Markdown"
+    )
+
+# --- INLINE CALLBACK HANDLERS ---
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('select_'))
+def handle_asset_selection_callback(call):
+    try:
+        symbol = call.data.split('_', 1)[1]
+        bot.answer_callback_query(call.id, text=f"Analyzing {symbol}...")
+        class MockMessage:
+            def __init__(self, chat_id):
+                self.chat = type('obj', (object,), {'id': chat_id})
+        process_signal_request(MockMessage(call.message.chat.id), symbol, "day")
+    except Exception as e:
+        print(f"Asset selection callback error: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('setbal_'))
+def handle_preset_balance(call):
+    try:
+        new_bal = float(call.data.split('_')[1])
+        set_user_balance(call.message.chat.id, new_bal)
+        bot.answer_callback_query(call.id, text=f"Capital updated to ${new_bal:,.2f} USD")
+        bot.send_message(
+            call.message.chat.id, 
+            f"✅ Capital baseline reconfigured to **${new_bal:,.2f} USD**", 
+            reply_markup=get_main_dashboard(), 
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        print(f"Preset balance error: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('calc_'))
+def handle_lot_calculation(call):
+    try:
+        _, symbol_part1, symbol_part2, sl_dist, tp_dist, risk_pct, active_balance = call.data.split('_')
+        symbol = f"{symbol_part1}/{symbol_part2}"
+        sl_dist = float(sl_dist)
+        tp_dist = float(tp_dist)
+        risk_pct = float(risk_pct)
+        active_balance = float(active_balance)
+
+        spec = ASSET_SPECS[symbol]
+
+        risk_dollars = active_balance * (risk_pct / 100.0)
+        reward_dollars = risk_dollars * (tp_dist / sl_dist)
+        
+        cent_lot_size = risk_dollars / (sl_dist * spec['contract_size'])
+        pips_tp = int(tp_dist * spec['pip_factor'])
+
+        calc_text = (
+            f"📐 **POSITION SIZING MATRIX ({risk_pct}% RISK) — {spec['name']}**\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"• **Assigned Capital:** `${active_balance:,.2f} USD`\n"
+            f"• **Recommended Volume:** `{cent_lot_size:.2f} Cent Lots`\n"
+            f"• **Maximum Risk Exposure:** -`${risk_dollars:,.2f} USD`\n"
+            f"• **Projected Target Yield:** +`${reward_dollars:,.2f} USD` *({pips_tp} {spec['unit']})*\n\n"
+            f"💡 *Input volume `{cent_lot_size:.2f}` into your MetaTrader Cent account terminal.*"
+        )
+
+        bot.answer_callback_query(call.id, text=f"Calculated for {risk_pct}% Risk Matrix")
+        bot.send_message(message.chat.id if hasattr(call, 'message') else call.message.chat.id, calc_text, parse_mode="Markdown")
+
+    except Exception as e:
+        print(f"Callback Error: {e}")
+        bot.answer_callback_query(call.id, text="Calculation error encountered.")
+
+def run_bot():
+    print("Telegram terminal online and listening...")
+    bot.infinity_polling()
+
+# --- FLASK KEEP-ALIVE SERVER & THREAD LAUNCHERS ---
+app = Flask(__name__)
+
 @app.route('/')
 def home():
-    return "SMC Professional API Trading Bot is active!"
-
-def run_flask():
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+    return "Institutional Terminal with Top 3 Market Scan is active and operational."
 
 if __name__ == "__main__":
-    flask_thread = threading.Thread(target=run_flask)
-    flask_thread.daemon = True
-    flask_thread.start()
+    bot_thread = threading.Thread(target=run_bot)
+    bot_thread.daemon = True
+    bot_thread.start()
     
-    print("🤖 Starting Telegram Bot polling loop with Professional APIs...")
-    bot.remove_webhook()
-    bot.infinity_polling()
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
