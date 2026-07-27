@@ -102,6 +102,10 @@ ASSET_SPECS = {
     }
 }
 
+# Global Memory State & Live Cache
+LAST_SIGNALS = {symbol: None for symbol in ASSET_SPECS.keys()}
+LIVE_MARKET_CACHE = {symbol: None for symbol in ASSET_SPECS.keys()}
+
 # --- DATABASE PERSISTENCE (SQLite) ---
 
 def init_db():
@@ -142,18 +146,35 @@ def set_user_balance(chat_id, balance):
     except Exception as e:
         print(f"DB Write Error: {e}")
 
+def get_all_active_chat_ids():
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("SELECT chat_id FROM user_balances")
+        rows = cursor.fetchall()
+        conn.close()
+        return [r[0] for r in rows]
+    except Exception as e:
+        print(f"Error fetching users: {e}")
+        return []
+
 init_db()
 
-# --- STREAMLINED BETA 1 STYLE DASHBOARD ---
+# --- PROFESSIONAL DASHBOARD LAYOUT ---
 
 def get_main_dashboard():
     markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    btn_overview = KeyboardButton("📊 Full Market Overview (11 Assets)")
     btn_gold = KeyboardButton("🥇 Gold (XAUUSDc)")
     btn_forex = KeyboardButton("📊 Forex Markets (Top 6)")
     btn_crypto = KeyboardButton("🪙 Crypto Assets")
     btn_balance = KeyboardButton("💳 Configure Capital")
     btn_info = KeyboardButton("⚙️ Terminal Diagnostics")
-    markup.add(btn_gold, btn_forex, btn_crypto, btn_balance, btn_info)
+    
+    markup.add(btn_overview)
+    markup.add(btn_gold, btn_forex)
+    markup.add(btn_crypto, btn_balance)
+    markup.add(btn_info)
     return markup
 
 def get_forex_submenu():
@@ -197,7 +218,7 @@ def parse_raw_amount(text):
     except ValueError:
         return None
 
-# --- TECHNICAL ANALYSIS ENGINE (ON-DEMAND) ---
+# --- TECHNICAL ANALYSIS ENGINE ---
 
 def calculate_sma(prices, period):
     if len(prices) < period:
@@ -246,18 +267,25 @@ def fetch_tf_data(symbol, interval):
         print(f"Error fetching {interval} for {symbol}: {e}")
         return None
 
-def generate_multi_timeframe_signal(symbol):
+def fetch_asset_analysis(symbol):
     htf_data = fetch_tf_data(symbol, "4h")
-    time.sleep(0.5)
+    time.sleep(1.0)
     ltf_data = fetch_tf_data(symbol, "15min")
 
     if not htf_data or not ltf_data:
         return None
 
+    return {"price": ltf_data['price'], "htf": htf_data, "ltf": ltf_data}
+
+def generate_multi_timeframe_signal(symbol):
+    data = fetch_asset_analysis(symbol)
+    if not data:
+        return None
+
     spec = ASSET_SPECS[symbol]
-    price = ltf_data['price']
-    htf = htf_data
-    ltf = ltf_data
+    price = data['price']
+    htf = data['htf']
+    ltf = data['ltf']
 
     if 45.0 <= htf['rsi'] <= 55.0 or abs(htf['sma20'] - htf['sma50']) / price < 0.0005:
         htf_bias = "RANGING / NEUTRAL ⚪"
@@ -308,6 +336,11 @@ def generate_multi_timeframe_signal(symbol):
     else:
         return {
             "is_sideways": True,
+            "symbol": symbol,
+            "name": spec['name'],
+            "price": price,
+            "htf_bias": htf_bias,
+            "spec": spec,
             "text": (
                 f"📊 **MARKET PROFILE — {spec['name']}**\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -342,6 +375,68 @@ def generate_multi_timeframe_signal(symbol):
         "spec": spec
     }
 
+# --- ⚡ RATE-LIMIT AWARE SCANNER ENGINE ---
+
+def live_market_scanner_loop():
+    print("⚡ Institutional scanner operational with rate-limit pacing...")
+    while True:
+        try:
+            for symbol in ASSET_SPECS.keys():
+                sig = generate_multi_timeframe_signal(symbol)
+                
+                if sig:
+                    LIVE_MARKET_CACHE[symbol] = sig
+
+                if not sig or sig.get('is_sideways'):
+                    LAST_SIGNALS[symbol] = "SIDEWAYS"
+                    time.sleep(3)
+                    continue
+
+                signal_key = f"{sig['signal']}_{sig['trade_type']}"
+
+                if LAST_SIGNALS.get(symbol) != signal_key:
+                    LAST_SIGNALS[symbol] = signal_key
+                    active_users = get_all_active_chat_ids()
+
+                    spec = sig['spec']
+                    pips_sl = int(sig['sl_dist'] * spec['pip_factor'])
+                    pips_tp = int(sig['tp_dist'] * spec['pip_factor'])
+
+                    for chat_id in active_users:
+                        active_balance = get_user_balance(chat_id)
+                        
+                        alert_card = (
+                            f"🚨 **INSTANT TRADE BROADCAST — {sig['name']}**\n"
+                            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                            f"⏱ **Timeframe Matrix:** `4H (Macro) & 15M (Execution)`\n"
+                            f"💵 **Current Market Price:** `{sig['price']:,.{spec['decimals']}f}`\n"
+                            f"🏛 **Macro Bias (4H):** {sig['htf_bias']}\n"
+                            f"🏷 **Setup Type:** `{sig['trade_type']}`\n\n"
+                            f"💡 **Directive:** {sig['signal']}\n"
+                            f"• **Entry Price:** `{sig['price']:,.{spec['decimals']}f}`\n"
+                            f"• **Stop Loss:** `{sig['sl_price']:,.{spec['decimals']}f}` *({pips_sl} {spec['unit']})*\n"
+                            f"• **Take Profit:** `{sig['tp_price']:,.{spec['decimals']}f}` *({pips_tp} {spec['unit']})*\n\n"
+                            f"⚙️ *Select institutional risk parameters below to compute execution volume:*"
+                        )
+
+                        markup = InlineKeyboardMarkup(row_width=3)
+                        b_low = InlineKeyboardButton("🛡 Conservative (0.25%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_0.25_{active_balance}")
+                        b_std = InlineKeyboardButton("⚖️ Standard (1.0%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_1.0_{active_balance}")
+                        b_high = InlineKeyboardButton("🚀 Aggressive (5.0%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_5.0_{active_balance}")
+                        markup.add(b_low, b_std, b_high)
+
+                        try:
+                            bot.send_message(chat_id, alert_card, reply_markup=markup, parse_mode="Markdown")
+                        except Exception as send_err:
+                            print(f"Failed to push alert to {chat_id}: {send_err}")
+
+                time.sleep(8)
+
+        except Exception as e:
+            print(f"Scanner Loop Error: {e}")
+
+        time.sleep(30)
+
 # --- TELEGRAM HANDLERS ---
 
 @bot.message_handler(commands=['start', 'help'])
@@ -351,21 +446,78 @@ def send_welcome(message):
         "📈 **INSTANT TRADING TERMINAL ACTIVE**\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"💳 **Assigned Capital:** `${current_bal:,.2f} USD`\n"
-        "⚡ **Engine Status:** On-demand analysis ready across Forex, Crypto, & Metals.\n\n"
-        "Select an asset category below:"
+        "⚡ **Engine Status:** Live surveillance running across Forex, Crypto, & Metals.\n\n"
+        "Select a dashboard module below:"
     )
     bot.send_message(message.chat.id, msg, reply_markup=get_main_dashboard(), parse_mode="Markdown")
+
+@bot.message_handler(func=lambda msg: msg.text == "📊 Full Market Overview (11 Assets)")
+def handle_full_market_overview(message):
+    bot.send_chat_action(message.chat.id, 'typing')
+    
+    gold_keys = ["XAU/USD"]
+    forex_keys = ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "GBP/JPY"]
+    crypto_keys = ["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD"]
+    
+    overview_text = (
+        "📊 **INSTITUTIONAL MULTI-ASSET SNAPSHOT**\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    )
+    
+    overview_text += "🥇 **Commodities & Metals:**\n"
+    for sym in gold_keys:
+        cached = LIVE_MARKET_CACHE.get(sym)
+        spec = ASSET_SPECS[sym]
+        if cached:
+            bias = cached.get('htf_bias', 'NEUTRAL')
+            price = cached.get('price', 0.0)
+            overview_text += f"• `{sym}`: `{price:,.{spec['decimals']}f}` | {bias}\n"
+        else:
+            overview_text += f"• `{sym}`: *Syncing data...*\n"
+            
+    overview_text += "\n📊 **Forex Majors:**\n"
+    for sym in forex_keys:
+        cached = LIVE_MARKET_CACHE.get(sym)
+        spec = ASSET_SPECS[sym]
+        if cached:
+            bias = cached.get('htf_bias', 'NEUTRAL')
+            price = cached.get('price', 0.0)
+            overview_text += f"• `{sym}`: `{price:,.{spec['decimals']}f}` | {bias}\n"
+        else:
+            overview_text += f"• `{sym}`: *Syncing data...*\n"
+
+    overview_text += "\n🪙 **Crypto Assets:**\n"
+    for sym in crypto_keys:
+        cached = LIVE_MARKET_CACHE.get(sym)
+        spec = ASSET_SPECS[sym]
+        if cached:
+            bias = cached.get('htf_bias', 'NEUTRAL')
+            price = cached.get('price', 0.0)
+            overview_text += f"• `{sym}`: `{price:,.{spec['decimals']}f}` | {bias}\n"
+        else:
+            overview_text += f"• `{sym}`: *Syncing data...*\n"
+
+    overview_text += (
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "💡 *Tap any asset category below to instantly generate a trade setup and risk matrix.*"
+    )
+    
+    bot.send_message(message.chat.id, overview_text, reply_markup=get_main_dashboard(), parse_mode="Markdown")
 
 def process_signal_request(message, symbol):
     bot.send_chat_action(message.chat.id, 'typing')
     active_balance = get_user_balance(message.chat.id)
 
-    sig = generate_multi_timeframe_signal(symbol)
+    sig = LIVE_MARKET_CACHE.get(symbol)
+    if not sig:
+        sig = generate_multi_timeframe_signal(symbol)
+        if sig:
+            LIVE_MARKET_CACHE[symbol] = sig
 
     if not sig:
         bot.send_message(
             message.chat.id, 
-            f"⚠️ Could not fetch data for `{symbol}`. Please check your API key or try again in a moment.", 
+            f"⚠️ API feed syncing for `{symbol}`. Please allow the background scanner 1 minute to refresh cache, then try again.", 
             reply_markup=get_main_dashboard(), 
             parse_mode="Markdown"
         )
@@ -441,7 +593,7 @@ def handle_bot_info(message):
         "⚙️ **System Diagnostic Matrix**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "• **Active Feeds:** 11 Instruments (Forex, Crypto, Metals)\n"
-        "• **Surveillance Mode:** On-Demand (Zero API Rate-Limit Lag)\n"
+        "• **Surveillance Interval:** Rate-limited background queue\n"
         "• **Risk Parameters:** 0.25% / 1.0% / 5.0% Exposure Tiers\n"
         f"• **Configured Capital:** `${current_bal:,.2f} USD`\n"
         "• **System Status:** Fully Operational 🟢"
@@ -465,7 +617,7 @@ def handle_raw_number_balance(message):
 def handle_asset_selection_callback(call):
     try:
         symbol = call.data.split('_', 1)[1]
-        bot.answer_callback_query(call.id, text=f"Analyzing {symbol}...")
+        bot.answer_callback_query(call.id, text=f"Loading {symbol} analysis...")
         class MockMessage:
             def __init__(self, chat_id):
                 self.chat = type('obj', (object,), {'id': chat_id})
@@ -537,6 +689,10 @@ if __name__ == "__main__":
     bot_thread = threading.Thread(target=run_bot)
     bot_thread.daemon = True
     bot_thread.start()
+
+    scanner_thread = threading.Thread(target=live_market_scanner_loop)
+    scanner_thread.daemon = True
+    scanner_thread.start()
     
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
