@@ -27,6 +27,10 @@ try:
 except Exception as e:
     print(f"Webhook reset notice: {e}")
 
+# --- IN-MEMORY CACHE TO PREVENT RATE LIMITING ---
+API_CACHE = {}
+CACHE_TTL = 120  # Cache valid for 2 minutes
+
 # --- ASSET SPECS FOR STANDARD ACCOUNTS ($) ---
 ASSET_SPECS = {
     "EUR/USD": {
@@ -196,7 +200,7 @@ def parse_raw_amount(text):
     except ValueError:
         return None
 
-# --- TECHNICAL ANALYSIS ENGINE ---
+# --- TECHNICAL ANALYSIS ENGINE WITH CACHING & ERROR SAFETY ---
 
 def calculate_sma(prices, period):
     if len(prices) < period:
@@ -229,18 +233,30 @@ def calculate_rsi(prices, period=14):
 def fetch_tf_data(symbol, interval):
     if not TWELVE_DATA_KEY:
         return None
+    
+    cache_key = f"{symbol}_{interval}"
+    now = time.time()
+    if cache_key in API_CACHE:
+        cached_data, timestamp = API_CACHE[cache_key]
+        if now - timestamp < CACHE_TTL:
+            return cached_data
+
     try:
         url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize=60&apikey={TWELVE_DATA_KEY}"
-        res = requests.get(url, timeout=7).json()
-        if 'values' not in res:
-            return None
-        closes = [float(item['close']) for item in res['values']]
+        res = requests.get(url, timeout=6).json()
         
+        if 'values' not in res:
+            print(f"API Warning for {symbol} ({interval}): {res.get('message', 'Unknown error / Rate limited')}")
+            return None
+            
+        closes = [float(item['close']) for item in res['values']]
         rsi = calculate_rsi(closes, 14)
         sma20 = calculate_sma(closes, 20)
         sma50 = calculate_sma(closes, 50)
         
-        return {"rsi": rsi, "sma20": sma20, "sma50": sma50, "price": closes[0]}
+        data = {"rsi": rsi, "sma20": sma20, "sma50": sma50, "price": closes[0]}
+        API_CACHE[cache_key] = (data, now)
+        return data
     except Exception as e:
         print(f"Error fetching {interval} for {symbol}: {e}")
         return None
@@ -260,7 +276,7 @@ def generate_multi_timeframe_signal(symbol, profile_type="day"):
         mult = 1.0
 
     htf_data = fetch_tf_data(symbol, macro_tf)
-    time.sleep(0.4) 
+    time.sleep(1.2)  # Strict pause to respect rate limits
     ltf_data = fetch_tf_data(symbol, ltf_tf)
 
     if not htf_data or not ltf_data:
@@ -333,7 +349,7 @@ def generate_multi_timeframe_signal(symbol, profile_type="day"):
         "spec": spec
     }
 
-# --- TELEGRAM HANDLERS (THREADED FOR NON-BLOCKING PERFORMANCE) ---
+# --- TELEGRAM HANDLERS (FULLY ISOLATED & THREADED) ---
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
@@ -342,7 +358,7 @@ def send_welcome(message):
         "📈 **STANDARD TRADING TERMINAL ACTIVE ($)**\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"💳 **Assigned Capital:** `${current_bal:,.2f} USD`\n"
-        "⚡ **Engine Status:** Beta 2.5 Multi-Profile Confluence Active.\n\n"
+        "⚡ **Engine Status:** Beta 2.6 Multi-Profile Confluence Active.\n\n"
         "Select an option below:"
     )
     bot.send_message(message.chat.id, msg, reply_markup=get_main_dashboard(), parse_mode="Markdown")
@@ -364,9 +380,9 @@ def process_top_3_scan(message):
         
         for symbol in scan_assets:
             sig = generate_multi_timeframe_signal(symbol, "day")
-            time.sleep(0.4) 
+            time.sleep(1.0) # Safe pacing for API limits
             if not sig:
-                scan_report += f"• `{symbol}`: *Data feed unavailable*\n\n"
+                scan_report += f"• `{symbol}`: *Data feed temporarily rate-limited*\n\n"
                 continue
                 
             spec = sig['spec']
@@ -382,8 +398,8 @@ def process_top_3_scan(message):
         scan_report += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n💡 *Select individual asset categories below for standard position sizing.*"
         bot.send_message(message.chat.id, scan_report, reply_markup=get_main_dashboard(), parse_mode="Markdown")
     except Exception as e:
-        print(f"Top 3 scan error: {e}")
-        bot.send_message(message.chat.id, "⚠️ Scan encountered a temporary delay. Please try again.", reply_markup=get_main_dashboard())
+        print(f"Top 3 scan thread error: {e}")
+        bot.send_message(message.chat.id, "⚠️ Scan completed with partial data limits. Please try again in 30 seconds.", reply_markup=get_main_dashboard())
 
 def process_signal_request(message, symbol, profile_type="day"):
     try:
@@ -395,7 +411,7 @@ def process_signal_request(message, symbol, profile_type="day"):
         if not sig:
             bot.send_message(
                 message.chat.id, 
-                f"⚠️ Could not fetch data for `{symbol}`. Please check your API key or try again in a moment.", 
+                f"⚠️ **API Rate Limit Reached:** Twelve Data free tier allows 8 requests/minute. Please wait 30 seconds before querying `{symbol}` again.", 
                 reply_markup=get_main_dashboard(), 
                 parse_mode="Markdown"
             )
@@ -432,7 +448,7 @@ def process_signal_request(message, symbol, profile_type="day"):
 
         bot.send_message(message.chat.id, card, reply_markup=markup, parse_mode="Markdown")
     except Exception as e:
-        print(f"Signal request error: {e}")
+        print(f"Signal request thread error: {e}")
 
 @bot.message_handler(func=lambda msg: msg.text in ["🥇 Gold (XAUUSD)", "/gold"])
 def handle_gold(message):
@@ -477,7 +493,7 @@ def handle_bot_info(message):
 
 @bot.message_handler(func=lambda msg: parse_raw_amount(msg.text) is not None)
 def handle_raw_number_balance(message):
-    new_bal = parse_raw_amount(message.text)
+    new_bal = parse_raw_amount(msg.text)
     set_user_balance(message.chat.id, new_bal)
     bot.reply_to(
         message, 
@@ -515,7 +531,6 @@ def handle_profile_selection_callback(call):
             def __init__(self, chat_id):
                 self.chat = type('obj', (object,), {'id': chat_id})
         
-        # Run signal analysis in background thread so callback query doesn't freeze
         threading.Thread(target=process_signal_request, args=(MockMessage(call.message.chat.id), symbol, profile_type)).start()
     except Exception as e:
         print(f"Profile selection callback error: {e}")
