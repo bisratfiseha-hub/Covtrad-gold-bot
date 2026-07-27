@@ -27,11 +27,9 @@ try:
 except Exception as e:
     print(f"Webhook reset notice: {e}")
 
-# --- TOP 3 BENCHMARK ASSETS ---
-TOP_3_PAIRS = ["XAU/USD", "EUR/USD", "BTC/USD"]
-
-# --- ASSET SPECS FOR CENT ACCOUNTS ---
+# --- ASSET SPECS FOR CENT ACCOUNTS (EXPANDED PORTFOLIO) ---
 ASSET_SPECS = {
+    # --- FOREX (Top 6 Volatile Pairs) ---
     "EUR/USD": {
         "name": "EUR/USD (Euro Cent)",
         "trend_sl": 0.0025,  "trend_tp": 0.0050,
@@ -62,6 +60,8 @@ ASSET_SPECS = {
         "trend_sl": 0.45,    "trend_tp": 0.90,
         "contract_size": 1.0, "pip_factor": 100,   "unit": "pips", "decimals": 3
     },
+    
+    # --- CRYPTO ASSETS ---
     "BTC/USD": {
         "name": "BTC/USD (Bitcoin Cent)",
         "trend_sl": 1200.00, "trend_tp": 2400.00,
@@ -82,6 +82,8 @@ ASSET_SPECS = {
         "trend_sl": 0.03,    "trend_tp": 0.06,
         "contract_size": 1.0, "pip_factor": 10000, "unit": "pips", "decimals": 4
     },
+
+    # --- COMMODITIES ---
     "XAU/USD": {
         "name": "XAU/USD (Gold Cent)",
         "trend_sl": 3.50,    "trend_tp": 7.00,
@@ -131,18 +133,16 @@ def set_user_balance(chat_id, balance):
 
 init_db()
 
-# --- DASHBOARD LAYOUT WITH NEW BUTTONS ---
+# --- STREAMLINED DASHBOARD LAYOUT ---
 
 def get_main_dashboard():
     markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     btn_gold = KeyboardButton("🥇 Gold (XAUUSDc)")
-    btn_scan_top3 = KeyboardButton("⚡ Instant Market Scan (Top 3)")
-    btn_overview = KeyboardButton("🌐 Total Overview (Top 3)")
     btn_forex = KeyboardButton("📊 Forex Markets (Top 6)")
     btn_crypto = KeyboardButton("🪙 Crypto Assets")
     btn_balance = KeyboardButton("💳 Configure Capital")
     btn_info = KeyboardButton("⚙️ Terminal Diagnostics")
-    markup.add(btn_gold, btn_scan_top3, btn_overview, btn_forex, btn_crypto, btn_balance, btn_info)
+    markup.add(btn_gold, btn_forex, btn_crypto, btn_balance, btn_info)
     return markup
 
 def get_forex_submenu():
@@ -167,6 +167,15 @@ def get_crypto_submenu():
     )
     return markup
 
+def get_timeframe_selector(symbol):
+    markup = InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        InlineKeyboardButton("⚡ Scalping Mode (1H / 5M)", callback_data=f"profile_{symbol}_scalp"),
+        InlineKeyboardButton("📊 Day Trading Mode (4H / 15M)", callback_data=f"profile_{symbol}_day"),
+        InlineKeyboardButton("🌊 Swing Trading Mode (Daily / 1H)", callback_data=f"profile_{symbol}_swing")
+    )
+    return markup
+
 def get_balance_presets():
     markup = InlineKeyboardMarkup(row_width=3)
     b1 = InlineKeyboardButton("$20 USD", callback_data="setbal_20")
@@ -186,7 +195,7 @@ def parse_raw_amount(text):
     except ValueError:
         return None
 
-# --- TECHNICAL ANALYSIS ENGINE ---
+# --- TECHNICAL ANALYSIS ENGINE (STRICT CONFLUENCE GATE) ---
 
 def calculate_sma(prices, period):
     if len(prices) < period:
@@ -236,6 +245,7 @@ def fetch_tf_data(symbol, interval):
         return None
 
 def generate_multi_timeframe_signal(symbol, profile_type="day"):
+    # Map profiles to intervals and distance multipliers
     if profile_type == "scalp":
         macro_tf, ltf_tf = "1h", "5min"
         profile_label = "Scalping (1H / 5M)"
@@ -244,7 +254,7 @@ def generate_multi_timeframe_signal(symbol, profile_type="day"):
         macro_tf, ltf_tf = "1day", "1h"
         profile_label = "Swing Trading (Daily / 1H)"
         mult = 2.0
-    else:  # default day trading standard (4H / 15M)
+    else:  # default day trading
         macro_tf, ltf_tf = "4h", "15min"
         profile_label = "Day Trading (4H / 15M)"
         mult = 1.0
@@ -261,6 +271,7 @@ def generate_multi_timeframe_signal(symbol, profile_type="day"):
     htf = htf_data
     ltf = ltf_data
 
+    # --- 1. DEFINE MACRO BIAS ---
     if htf['rsi'] > 55 and htf['sma20'] > htf['sma50']:
         htf_bias = "BULLISH 🟢"
     elif htf['rsi'] < 45 and htf['sma20'] < htf['sma50']:
@@ -268,32 +279,35 @@ def generate_multi_timeframe_signal(symbol, profile_type="day"):
     else:
         htf_bias = "RANGING / CHOPPY ⚪"
 
+    # --- 2. DEFINE EXECUTION MOMENTUM ---
     ltf_bullish = ltf['sma20'] > ltf['sma50'] and ltf['rsi'] > 52
     ltf_bearish = ltf['sma20'] < ltf['sma50'] and ltf['rsi'] < 48
 
     sl_dist = spec['trend_sl'] * mult
     tp_dist = spec['trend_tp'] * mult
 
+    # --- 3. STRICT CONFLUENCE GATE ---
     if "BULLISH" in htf_bias and ltf_bullish:
         trade_type = "TREND CONTINUATION"
         signal = "BUY / LONG 🟢"
-        note = f"High Confluence: Macro & Execution aligned upward."
+        note = f"High Confluence [{profile_label}]: Macro & Execution aligned upward."
+
     elif "BEARISH" in htf_bias and ltf_bearish:
         trade_type = "TREND CONTINUATION"
         signal = "SELL / SHORT 🔴"
-        note = f"High Confluence: Macro & Execution aligned downward."
+        note = f"High Confluence [{profile_label}]: Macro & Execution aligned downward."
+
     else:
         return {
             "is_sideways": True,
-            "symbol": symbol,
-            "name": spec['name'],
-            "price": price,
-            "htf_bias": htf_bias,
-            "rsi": ltf['rsi'],
             "text": (
                 f"🚫 **NO TRADE ZONE — {spec['name']}**\n"
-                f"💵 **Price:** `{price:,.{spec['decimals']}f}` | 🏛 **Macro:** {htf_bias}\n"
-                f"🛑 *Conditions conflict. Stand aside.*"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"⏱ **Profile Matrix:** `{profile_label}`\n"
+                f"💵 **Current Price:** `{price:,.{spec['decimals']}f}`\n"
+                f"🏛 **Macro Bias:** {htf_bias}\n"
+                f"📈 **Momentum RSI:** `{ltf['rsi']:.1f}`\n\n"
+                f"🛑 **Strategy Verdict:** *Market conditions conflict under this timeframe profile. **Stand aside and protect capital.***"
             )
         }
 
@@ -330,85 +344,10 @@ def send_welcome(message):
         "📈 **INSTANT TRADING TERMINAL ACTIVE**\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"💳 **Assigned Capital:** `${current_bal:,.2f} USD`\n"
-        "⚡ **Engine Status:** 4H / 15M Institutional Standard Active.\n\n"
-        "Select an option or asset below:"
+        "⚡ **Engine Status:** Beta 2.5 Multi-Profile Confluence Active.\n\n"
+        "Select an asset category below:"
     )
     bot.send_message(message.chat.id, msg, reply_markup=get_main_dashboard(), parse_mode="Markdown")
-
-@bot.message_handler(func=lambda msg: msg.text == "🌐 Total Overview (Top 3)")
-def handle_total_overview(message):
-    bot.send_chat_action(message.chat.id, 'typing')
-    overview_text = "🌐 **TOTAL MARKET OVERVIEW (TOP 3 ASSETS)**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    
-    for symbol in TOP_3_PAIRS:
-        spec = ASSET_SPECS[symbol]
-        htf = fetch_tf_data(symbol, "4h")
-        time.sleep(0.3)
-        if not htf:
-            overview_text += f"• **{spec['name']}:** ⚠️ *Data feed unavailable*\n\n"
-            continue
-        
-        if htf['rsi'] > 55 and htf['sma20'] > htf['sma50']:
-            bias = "BULLISH 🟢"
-        elif htf['rsi'] < 45 and htf['sma20'] < htf['sma50']:
-            bias = "BEARISH 🔴"
-        else:
-            bias = "RANGING ⚪"
-            
-        overview_text += (
-            f"• **{spec['name']}**\n"
-            f"  💵 Price: `{htf['price']:,.{spec['decimals']}f}`\n"
-            f"  🏛 Macro Bias (4H): {bias}\n"
-            f"  📈 RSI (14): `{htf['rsi']:.1f}`\n\n"
-        )
-        
-    overview_text += "💡 *Use 'Instant Market Scan' to check actionable entry setups.*"
-    bot.send_message(message.chat.id, overview_text, reply_markup=get_main_dashboard(), parse_mode="Markdown")
-
-@bot.message_handler(func=lambda msg: msg.text == "⚡ Instant Market Scan (Top 3)")
-def handle_instant_market_scan(message):
-    bot.send_chat_action(message.chat.id, 'typing')
-    bot.send_message(message.chat.id, "⚡ **Scanning Top 3 Assets for Active Signals...**", parse_mode="Markdown")
-    
-    active_balance = get_user_balance(message.chat.id)
-    
-    for symbol in TOP_3_PAIRS:
-        sig = generate_multi_timeframe_signal(symbol, profile_type="day")
-        time.sleep(0.3)
-        
-        if not sig:
-            continue
-            
-        if sig.get('is_sideways'):
-            bot.send_message(message.chat.id, sig['text'], parse_mode="Markdown")
-            continue
-            
-        spec = sig['spec']
-        pips_sl = int(sig['sl_dist'] * spec['pip_factor'])
-        pips_tp = int(sig['tp_dist'] * spec['pip_factor'])
-
-        card = (
-            f"💎 **SIGNAL MATCH — {sig['name']}**\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"💵 **Price:** `{sig['price']:,.{spec['decimals']}f}` | {sig['htf_bias']}\n"
-            f"💡 **Directive:** {sig['signal']}\n"
-            f"• **Stop Loss:** `{sig['sl_price']:,.{spec['decimals']}f}` *({pips_sl} {spec['unit']})*\n"
-            f"• **Take Profit:** `{sig['tp_price']:,.{spec['decimals']}f}` *({pips_tp} {spec['unit']})*\n"
-        )
-
-        markup = InlineKeyboardMarkup(row_width=3)
-        b_low = InlineKeyboardButton("🛡 0.25%", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_0.25_{active_balance}")
-        b_std = InlineKeyboardButton("⚖️ 1.0%", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_1.0_{active_balance}")
-        b_high = InlineKeyboardButton("🚀 5.0%", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_5.0_{active_balance}")
-        markup.add(b_low, b_std, b_high)
-
-        bot.send_message(message.chat.id, card, reply_markup=markup, parse_mode="Markdown")
-
-    bot.send_message(message.chat.id, "✅ **Scan Complete.**", reply_markup=get_main_dashboard(), parse_mode="Markdown")
-
-@bot.message_handler(func=lambda msg: msg.text in ["🥇 Gold (XAUUSDc)", "/gold"])
-def handle_gold(message):
-    process_signal_request(message, "XAU/USD", "day")
 
 def process_signal_request(message, symbol, profile_type="day"):
     bot.send_chat_action(message.chat.id, 'typing')
@@ -434,10 +373,11 @@ def process_signal_request(message, symbol, profile_type="day"):
     pips_tp = int(sig['tp_dist'] * spec['pip_factor'])
 
     card = (
-        f"💎 **SIGNAL MATRIX — {sig['name']}**\n"
+        f"💎 **BETA 2.5 SIGNAL MATRIX — {sig['name']}**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"⏱ **Profile Matrix:** `{sig['profile_label']}`\n"
         f"💵 **Current Market Price:** `{sig['price']:,.{spec['decimals']}f}`\n"
-        f"🏛 **Macro Bias (4H):** {sig['htf_bias']}\n"
+        f"🏛 **Macro Bias:** {sig['htf_bias']}\n"
         f"🏷 **Setup Classification:** `{sig['trade_type']}`\n\n"
         f"💡 **Directive:** {sig['signal']}\n"
         f"• **Entry Price:** `{sig['price']:,.{spec['decimals']}f}`\n"
@@ -454,6 +394,15 @@ def process_signal_request(message, symbol, profile_type="day"):
     markup.add(b_low, b_std, b_high)
 
     bot.send_message(message.chat.id, card, reply_markup=markup, parse_mode="Markdown")
+
+@bot.message_handler(func=lambda msg: msg.text in ["🥇 Gold (XAUUSDc)", "/gold"])
+def handle_gold(message):
+    bot.send_message(
+        message.chat.id,
+        "🥇 **Gold (XAU/USD) — Select Timeframe Profile:**",
+        reply_markup=get_timeframe_selector("XAU/USD"),
+        parse_mode="Markdown"
+    )
 
 @bot.message_handler(func=lambda msg: msg.text == "📊 Forex Markets (Top 6)")
 def handle_forex_menu(message):
@@ -487,10 +436,10 @@ def handle_balance_menu(message):
 def handle_bot_info(message):
     current_bal = get_user_balance(message.chat.id)
     info_text = (
-        "⚙️ **System Diagnostic Matrix**\n"
+        "⚙️ **System Diagnostic Matrix (Beta 2.5)**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        "• **Active Feeds:** Top 3 Benchmark + 11 Instruments\n"
-        "• **Surveillance Mode:** On-Demand 4H/15M Standard\n"
+        "• **Active Feeds:** 11 Instruments (Forex, Crypto, Metals)\n"
+        "• **Surveillance Mode:** On-Demand with Multi-Profile Timeframes\n"
         "• **Risk Parameters:** 0.25% / 1.0% / 5.0% Exposure Tiers\n"
         f"• **Configured Capital:** `${current_bal:,.2f} USD`\n"
         "• **System Status:** Fully Operational 🟢"
@@ -514,13 +463,33 @@ def handle_raw_number_balance(message):
 def handle_asset_selection_callback(call):
     try:
         symbol = call.data.split('_', 1)[1]
-        bot.answer_callback_query(call.id, text=f"Analyzing {symbol}...")
+        bot.answer_callback_query(call.id, text=f"Selected {symbol}. Choose profile:")
+        bot.edit_message_text(
+            f"⏱ **Select Timeframe Profile for `{symbol}`:**",
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            reply_markup=get_timeframe_selector(symbol),
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        print(f"Asset selection callback error: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('profile_'))
+def handle_profile_selection_callback(call):
+    try:
+        parts = call.data.split('_')
+        # format: profile_<symbol_part1>_<symbol_part2>_<profile> or similar
+        # For pairs like EUR/USD, split produces ['profile', 'EUR', 'USD', 'scalp']
+        profile_type = parts[-1]
+        symbol = "/".join(parts[1:-1])
+
+        bot.answer_callback_query(call.id, text=f"Analyzing {symbol} ({profile_type})...")
         class MockMessage:
             def __init__(self, chat_id):
                 self.chat = type('obj', (object,), {'id': chat_id})
-        process_signal_request(MockMessage(call.message.chat.id), symbol, "day")
+        process_signal_request(MockMessage(call.message.chat.id), symbol, profile_type)
     except Exception as e:
-        print(f"Asset selection callback error: {e}")
+        print(f"Profile selection callback error: {e}")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('setbal_'))
 def handle_preset_balance(call):
@@ -566,7 +535,7 @@ def handle_lot_calculation(call):
         )
 
         bot.answer_callback_query(call.id, text=f"Calculated for {risk_pct}% Risk Matrix")
-        bot.send_message(message.chat.id if hasattr(call, 'message') else call.message.chat.id, calc_text, parse_mode="Markdown")
+        bot.send_message(call.message.chat.id, calc_text, parse_mode="Markdown")
 
     except Exception as e:
         print(f"Callback Error: {e}")
@@ -581,7 +550,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Institutional Terminal with Top 3 Market Scan is active and operational."
+    return "Beta 2.5 Multi-Profile Institutional Terminal is active and operational."
 
 if __name__ == "__main__":
     bot_thread = threading.Thread(target=run_bot)
