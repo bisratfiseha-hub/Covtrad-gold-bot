@@ -16,7 +16,7 @@ from telebot.types import (
 BOT_TOKEN = os.environ.get('BOT_TOKEN', 'YOUR_TELEGRAM_BOT_TOKEN_HERE')
 TWELVE_DATA_KEY = os.environ.get('TWELVE_DATA_API_KEY', '')
 
-DEFAULT_BALANCE = 50.0
+DEFAULT_BALANCE = 500.0  # Standard accounts typically start with higher baseline capital
 DB_NAME = "bot_data.db"
 
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -27,67 +27,67 @@ try:
 except Exception as e:
     print(f"Webhook reset notice: {e}")
 
-# --- ASSET SPECS FOR CENT ACCOUNTS (EXPANDED PORTFOLIO) ---
+# --- ASSET SPECS FOR STANDARD ACCOUNTS ($) ---
 ASSET_SPECS = {
     # --- FOREX (Top 6 Volatile Pairs) ---
     "EUR/USD": {
-        "name": "EUR/USD (Euro Cent)",
+        "name": "EUR/USD (Standard)",
         "trend_sl": 0.0025,  "trend_tp": 0.0050,
-        "contract_size": 1.0, "pip_factor": 10000, "unit": "pips", "decimals": 5
+        "contract_size": 100000.0, "pip_factor": 10000, "unit": "pips", "decimals": 5
     },
     "GBP/USD": {
-        "name": "GBP/USD (Cable Cent)",
+        "name": "GBP/USD (Standard)",
         "trend_sl": 0.0030,  "trend_tp": 0.0060,
-        "contract_size": 1.0, "pip_factor": 10000, "unit": "pips", "decimals": 5
+        "contract_size": 100000.0, "pip_factor": 10000, "unit": "pips", "decimals": 5
     },
     "USD/JPY": {
-        "name": "USD/JPY (Yen Cent)",
+        "name": "USD/JPY (Standard)",
         "trend_sl": 0.35,    "trend_tp": 0.70,
-        "contract_size": 1.0, "pip_factor": 100,   "unit": "pips", "decimals": 3
+        "contract_size": 100000.0, "pip_factor": 100,   "unit": "pips", "decimals": 3
     },
     "AUD/USD": {
-        "name": "AUD/USD (Aussie Cent)",
+        "name": "AUD/USD (Standard)",
         "trend_sl": 0.0025,  "trend_tp": 0.0050,
-        "contract_size": 1.0, "pip_factor": 10000, "unit": "pips", "decimals": 5
+        "contract_size": 100000.0, "pip_factor": 10000, "unit": "pips", "decimals": 5
     },
     "USD/CAD": {
-        "name": "USD/CAD (Loonie Cent)",
+        "name": "USD/CAD (Standard)",
         "trend_sl": 0.0025,  "trend_tp": 0.0050,
-        "contract_size": 1.0, "pip_factor": 10000, "unit": "pips", "decimals": 5
+        "contract_size": 100000.0, "pip_factor": 10000, "unit": "pips", "decimals": 5
     },
     "GBP/JPY": {
-        "name": "GBP/JPY (Ninja Cent)",
+        "name": "GBP/JPY (Standard)",
         "trend_sl": 0.45,    "trend_tp": 0.90,
-        "contract_size": 1.0, "pip_factor": 100,   "unit": "pips", "decimals": 3
+        "contract_size": 100000.0, "pip_factor": 100,   "unit": "pips", "decimals": 3
     },
     
     # --- CRYPTO ASSETS ---
     "BTC/USD": {
-        "name": "BTC/USD (Bitcoin Cent)",
+        "name": "BTC/USD (Standard)",
         "trend_sl": 1200.00, "trend_tp": 2400.00,
         "contract_size": 1.0, "pip_factor": 1,   "unit": "points", "decimals": 2
     },
     "ETH/USD": {
-        "name": "ETH/USD (Ethereum Cent)",
+        "name": "ETH/USD (Standard)",
         "trend_sl": 80.00,   "trend_tp": 160.00,
         "contract_size": 1.0, "pip_factor": 1,   "unit": "points", "decimals": 2
     },
     "SOL/USD": {
-        "name": "SOL/USD (Solana Cent)",
+        "name": "SOL/USD (Standard)",
         "trend_sl": 5.00,    "trend_tp": 10.00,
         "contract_size": 1.0, "pip_factor": 1,   "unit": "points", "decimals": 2
     },
     "XRP/USD": {
-        "name": "XRP/USD (Ripple Cent)",
+        "name": "XRP/USD (Standard)",
         "trend_sl": 0.03,    "trend_tp": 0.06,
-        "contract_size": 1.0, "pip_factor": 10000, "unit": "pips", "decimals": 4
+        "contract_size": 10000.0, "pip_factor": 10000, "unit": "pips", "decimals": 4
     },
 
     # --- COMMODITIES ---
     "XAU/USD": {
-        "name": "XAU/USD (Gold Cent)",
+        "name": "XAU/USD (Gold Standard)",
         "trend_sl": 3.50,    "trend_tp": 7.00,
-        "contract_size": 1.0, "pip_factor": 100, "unit": "pips", "decimals": 2
+        "contract_size": 100.0, "pip_factor": 100, "unit": "pips", "decimals": 2
     }
 }
 
@@ -138,7 +138,7 @@ init_db()
 def get_main_dashboard():
     markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     btn_scan = KeyboardButton("🔥 Top 3 Pairs Scan")
-    btn_gold = KeyboardButton("🥇 Gold (XAUUSDc)")
+    btn_gold = KeyboardButton("🥇 Gold (XAUUSD)")
     btn_forex = KeyboardButton("📊 Forex Markets (Top 6)")
     btn_crypto = KeyboardButton("🪙 Crypto Assets")
     btn_balance = KeyboardButton("💳 Configure Capital")
@@ -182,12 +182,12 @@ def get_timeframe_selector(symbol):
 
 def get_balance_presets():
     markup = InlineKeyboardMarkup(row_width=3)
-    b1 = InlineKeyboardButton("$20 USD", callback_data="setbal_20")
-    b2 = InlineKeyboardButton("$25 USD", callback_data="setbal_25")
-    b3 = InlineKeyboardButton("$50 USD", callback_data="setbal_50")
-    b4 = InlineKeyboardButton("$100 USD", callback_data="setbal_100")
-    b5 = InlineKeyboardButton("$250 USD", callback_data="setbal_250")
-    b6 = InlineKeyboardButton("$500 USD", callback_data="setbal_500")
+    b1 = InlineKeyboardButton("$100 USD", callback_data="setbal_100")
+    b2 = InlineKeyboardButton("$250 USD", callback_data="setbal_250")
+    b3 = InlineKeyboardButton("$500 USD", callback_data="setbal_500")
+    b4 = InlineKeyboardButton("$1,000 USD", callback_data="setbal_1000")
+    b5 = InlineKeyboardButton("$2,500 USD", callback_data="setbal_2500")
+    b6 = InlineKeyboardButton("$5,000 USD", callback_data="setbal_5000")
     markup.add(b1, b2, b3, b4, b5, b6)
     return markup
 
@@ -347,7 +347,7 @@ def generate_multi_timeframe_signal(symbol, profile_type="day"):
 def send_welcome(message):
     current_bal = get_user_balance(message.chat.id)
     msg = (
-        "📈 **INSTANT TRADING TERMINAL ACTIVE**\n"
+        "📈 **STANDARD TRADING TERMINAL ACTIVE ($)**\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"💳 **Assigned Capital:** `${current_bal:,.2f} USD`\n"
         "⚡ **Engine Status:** Beta 2.5 Multi-Profile Confluence Active.\n\n"
@@ -383,7 +383,7 @@ def handle_top_3_scan(message):
             scan_report += f"  Price: `{sig['price']:,.{spec['decimals']}f}` | Bias: {sig['htf_bias']}\n"
             scan_report += f"  Directive: **{sig['signal']}**\n\n"
             
-    scan_report += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n💡 *Select individual asset categories below for granular position sizing.*"
+    scan_report += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n💡 *Select individual asset categories below for standard position sizing.*"
     
     bot.send_message(message.chat.id, scan_report, reply_markup=get_main_dashboard(), parse_mode="Markdown")
 
@@ -411,7 +411,7 @@ def process_signal_request(message, symbol, profile_type="day"):
     pips_tp = int(sig['tp_dist'] * spec['pip_factor'])
 
     card = (
-        f"💎 **BETA 2.5 SIGNAL MATRIX — {sig['name']}**\n"
+        f"💎 **STANDARD ACCOUNT SIGNAL MATRIX — {sig['name']}**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"⏱ **Profile Matrix:** `{sig['profile_label']}`\n"
         f"💵 **Current Market Price:** `{sig['price']:,.{spec['decimals']}f}`\n"
@@ -422,18 +422,18 @@ def process_signal_request(message, symbol, profile_type="day"):
         f"• **Stop Loss:** `{sig['sl_price']:,.{spec['decimals']}f}` *({pips_sl} {spec['unit']})*\n"
         f"• **Take Profit:** `{sig['tp_price']:,.{spec['decimals']}f}` *({pips_tp} {spec['unit']})*\n\n"
         f"📝 **Analytic Context:** {sig['note']}\n\n"
-        f"👇 **Select Risk Exposure Profile for Position Sizing:**"
+        f"👇 **Select Risk Exposure Profile for Standard Lot Sizing:**"
     )
 
     markup = InlineKeyboardMarkup(row_width=3)
-    b_low = InlineKeyboardButton("🛡 Conservative (0.25%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_0.25_{active_balance}")
+    b_low = InlineKeyboardButton("🛡 Conservative (0.5%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_0.5_{active_balance}")
     b_std = InlineKeyboardButton("⚖️ Standard (1.0%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_1.0_{active_balance}")
-    b_high = InlineKeyboardButton("🚀 Aggressive (5.0%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_5.0_{active_balance}")
+    b_high = InlineKeyboardButton("🚀 Aggressive (2.0%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_2.0_{active_balance}")
     markup.add(b_low, b_std, b_high)
 
     bot.send_message(message.chat.id, card, reply_markup=markup, parse_mode="Markdown")
 
-@bot.message_handler(func=lambda msg: msg.text in ["🥇 Gold (XAUUSDc)", "/gold"])
+@bot.message_handler(func=lambda msg: msg.text in ["🥇 Gold (XAUUSD)", "/gold"])
 def handle_gold(message):
     bot.send_message(
         message.chat.id,
@@ -464,9 +464,9 @@ def handle_crypto_menu(message):
 def handle_balance_menu(message):
     current_bal = get_user_balance(message.chat.id)
     msg = (
-        f"💳 **Capital Management Portal**\n\n"
+        f"💳 **Capital Management Portal ($)**\n\n"
         f"Active Account Balance: **${current_bal:,.2f} USD**\n\n"
-        "Select an institutional tier below or input exact decimal value directly (e.g. `57.59`):"
+        "Select an institutional tier below or input exact decimal value directly (e.g. `1250.50`):"
     )
     bot.send_message(message.chat.id, msg, reply_markup=get_balance_presets(), parse_mode="Markdown")
 
@@ -474,11 +474,11 @@ def handle_balance_menu(message):
 def handle_bot_info(message):
     current_bal = get_user_balance(message.chat.id)
     info_text = (
-        "⚙️ **System Diagnostic Matrix (Beta 2.5)**\n"
+        "⚙️ **System Diagnostic Matrix ($ Standard)**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "• **Active Feeds:** 11 Instruments (Forex, Crypto, Metals)\n"
         "• **Surveillance Mode:** On-Demand with Multi-Profile Timeframes\n"
-        "• **Risk Parameters:** 0.25% / 1.0% / 5.0% Exposure Tiers\n"
+        "• **Risk Parameters:** 0.5% / 1.0% / 2.0% Standard Exposure Tiers\n"
         f"• **Configured Capital:** `${current_bal:,.2f} USD`\n"
         "• **System Status:** Fully Operational 🟢"
     )
@@ -486,7 +486,7 @@ def handle_bot_info(message):
 
 @bot.message_handler(func=lambda msg: parse_raw_amount(msg.text) is not None)
 def handle_raw_number_balance(message):
-    new_bal = parse_raw_amount(message.text)
+    new_bal = parse_raw_amount(msg.text)
     set_user_balance(message.chat.id, new_bal)
     bot.reply_to(
         message, 
@@ -545,29 +545,30 @@ def handle_preset_balance(call):
 @bot.callback_query_handler(func=lambda call: call.data.startswith('calc_'))
 def handle_lot_calculation(call):
     try:
-        _, symbol_part1, symbol_part2, sl_dist, tp_dist, risk_pct, active_balance = call.data.split('_')
-        symbol = f"{symbol_part1}/{symbol_part2}"
-        sl_dist = float(sl_dist)
-        tp_dist = float(tp_dist)
-        risk_pct = float(risk_pct)
-        active_balance = float(active_balance)
+        parts = call.data.split('_')
+        symbol = parts[1]
+        sl_dist = float(parts[2])
+        tp_dist = float(parts[3])
+        risk_pct = float(parts[4])
+        active_balance = float(parts[5])
 
         spec = ASSET_SPECS[symbol]
 
         risk_dollars = active_balance * (risk_pct / 100.0)
         reward_dollars = risk_dollars * (tp_dist / sl_dist)
         
-        cent_lot_size = risk_dollars / (sl_dist * spec['contract_size'])
+        # Standard lot calculation: Risk ($) / (Stop Loss distance * Contract Size)
+        standard_lot_size = risk_dollars / (sl_dist * spec['contract_size'])
         pips_tp = int(tp_dist * spec['pip_factor'])
 
         calc_text = (
-            f"📐 **POSITION SIZING MATRIX ({risk_pct}% RISK) — {spec['name']}**\n"
+            f"📐 **STANDARD POSITION SIZING ({risk_pct}% RISK) — {spec['name']}**\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"• **Assigned Capital:** `${active_balance:,.2f} USD`\n"
-            f"• **Recommended Volume:** `{cent_lot_size:.2f} Cent Lots`\n"
+            f"• **Recommended Volume:** `{standard_lot_size:.2f} Standard Lots`\n"
             f"• **Maximum Risk Exposure:** -`${risk_dollars:,.2f} USD`\n"
             f"• **Projected Target Yield:** +`${reward_dollars:,.2f} USD` *({pips_tp} {spec['unit']})*\n\n"
-            f"💡 *Input volume `{cent_lot_size:.2f}` into your MetaTrader Cent account terminal.*"
+            f"💡 *Input volume `{standard_lot_size:.2f}` into your MetaTrader Standard account terminal.*"
         )
 
         bot.answer_callback_query(call.id, text=f"Calculated for {risk_pct}% Risk Matrix")
@@ -586,7 +587,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Beta 2.5 Multi-Profile Institutional Terminal is active and operational."
+    return "Standard Account Institutional Terminal is active and operational."
 
 if __name__ == "__main__":
     bot_thread = threading.Thread(target=run_bot)
