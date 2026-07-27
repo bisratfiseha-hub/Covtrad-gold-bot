@@ -196,7 +196,7 @@ def parse_raw_amount(text):
     except ValueError:
         return None
 
-# --- TECHNICAL ANALYSIS & CACHED API ENGINE ---
+# --- TECHNICAL ANALYSIS ENGINE ---
 
 def calculate_sma(prices, period):
     if len(prices) < period:
@@ -260,7 +260,7 @@ def generate_multi_timeframe_signal(symbol, profile_type="day"):
         mult = 1.0
 
     htf_data = fetch_tf_data(symbol, macro_tf)
-    time.sleep(0.6)  # Pacing requests to prevent Twelve Data rate limits
+    time.sleep(0.4) 
     ltf_data = fetch_tf_data(symbol, ltf_tf)
 
     if not htf_data or not ltf_data:
@@ -333,7 +333,7 @@ def generate_multi_timeframe_signal(symbol, profile_type="day"):
         "spec": spec
     }
 
-# --- TELEGRAM HANDLERS ---
+# --- TELEGRAM HANDLERS (THREADED FOR NON-BLOCKING PERFORMANCE) ---
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
@@ -347,86 +347,101 @@ def send_welcome(message):
     )
     bot.send_message(message.chat.id, msg, reply_markup=get_main_dashboard(), parse_mode="Markdown")
 
-@bot.message_handler(func=lambda msg: msg.text == "🔥 Top 3 Pairs Scan")
+@bot.message_handler(func=lambda msg: msg and msg.text and "Top 3 Pairs Scan" in msg.text)
 def handle_top_3_scan(message):
-    bot.send_chat_action(message.chat.id, 'typing')
-    scan_assets = ["XAU/USD", "EUR/USD", "BTC/USD"]
-    
-    scan_report = (
-        "🔥 **INSTITUTIONAL TOP 3 ASSETS SCANNER**\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "⏱ *Multi-Timeframe Confluence Engine (Day Trading Profile)*\n\n"
-    )
-    
-    for symbol in scan_assets:
-        sig = generate_multi_timeframe_signal(symbol, "day")
-        time.sleep(0.5)  # Buffer to prevent rate limits
-        if not sig:
-            scan_report += f"• `{symbol}`: *Data feed unavailable or rate-limited*\n\n"
-            continue
-            
-        spec = sig['spec']
-        if sig.get('is_sideways'):
-            scan_report += f"• **{spec['name']}**\n"
-            scan_report += f"  Price: `{sig['price']:,.{spec['decimals']}f}` | Bias: {sig['htf_bias']}\n"
-            scan_report += f"  Status: `RANGING / STAND ASIDE ⚪`\n\n"
-        else:
-            scan_report += f"• **{spec['name']}**\n"
-            scan_report += f"  Price: `{sig['price']:,.{spec['decimals']}f}` | Bias: {sig['htf_bias']}\n"
-            scan_report += f"  Directive: **{sig['signal']}**\n\n"
-            
-    scan_report += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n💡 *Select individual asset categories below for standard position sizing.*"
-    bot.send_message(message.chat.id, scan_report, reply_markup=get_main_dashboard(), parse_mode="Markdown")
+    threading.Thread(target=process_top_3_scan, args=(message,)).start()
+
+def process_top_3_scan(message):
+    try:
+        bot.send_chat_action(message.chat.id, 'typing')
+        scan_assets = ["XAU/USD", "EUR/USD", "BTC/USD"]
+        
+        scan_report = (
+            "🔥 **INSTITUTIONAL TOP 3 ASSETS SCANNER**\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "⏱ *Multi-Timeframe Confluence Engine (Day Trading Profile)*\n\n"
+        )
+        
+        for symbol in scan_assets:
+            sig = generate_multi_timeframe_signal(symbol, "day")
+            time.sleep(0.4) 
+            if not sig:
+                scan_report += f"• `{symbol}`: *Data feed unavailable*\n\n"
+                continue
+                
+            spec = sig['spec']
+            if sig.get('is_sideways'):
+                scan_report += f"• **{spec['name']}**\n"
+                scan_report += f"  Price: `{sig['price']:,.{spec['decimals']}f}` | Bias: {sig['htf_bias']}\n"
+                scan_report += f"  Status: `RANGING / STAND ASIDE ⚪`\n\n"
+            else:
+                scan_report += f"• **{spec['name']}**\n"
+                scan_report += f"  Price: `{sig['price']:,.{spec['decimals']}f}` | Bias: {sig['htf_bias']}\n"
+                scan_report += f"  Directive: **{sig['signal']}**\n\n"
+                
+        scan_report += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n💡 *Select individual asset categories below for standard position sizing.*"
+        bot.send_message(message.chat.id, scan_report, reply_markup=get_main_dashboard(), parse_mode="Markdown")
+    except Exception as e:
+        print(f"Top 3 scan error: {e}")
+        bot.send_message(message.chat.id, "⚠️ Scan encountered a temporary delay. Please try again.", reply_markup=get_main_dashboard())
 
 def process_signal_request(message, symbol, profile_type="day"):
-    bot.send_chat_action(message.chat.id, 'typing')
-    active_balance = get_user_balance(message.chat.id)
+    try:
+        bot.send_chat_action(message.chat.id, 'typing')
+        active_balance = get_user_balance(message.chat.id)
 
-    sig = generate_multi_timeframe_signal(symbol, profile_type)
+        sig = generate_multi_timeframe_signal(symbol, profile_type)
 
-    if not sig:
-        bot.send_message(
-            message.chat.id, 
-            f"⚠️ Could not fetch data for `{symbol}`. API rate limit reached or feed unavailable.", 
-            reply_markup=get_main_dashboard(), 
-            parse_mode="Markdown"
+        if not sig:
+            bot.send_message(
+                message.chat.id, 
+                f"⚠️ Could not fetch data for `{symbol}`. Please check your API key or try again in a moment.", 
+                reply_markup=get_main_dashboard(), 
+                parse_mode="Markdown"
+            )
+            return
+
+        if sig.get('is_sideways'):
+            bot.send_message(message.chat.id, sig['text'], reply_markup=get_main_dashboard(), parse_mode="Markdown")
+            return
+
+        spec = sig['spec']
+        pips_sl = int(sig['sl_dist'] * spec['pip_factor'])
+        pips_tp = int(sig['tp_dist'] * spec['pip_factor'])
+
+        card = (
+            f"💎 **STANDARD ACCOUNT SIGNAL MATRIX — {sig['name']}**\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"⏱ **Profile Matrix:** `{sig['profile_label']}`\n"
+            f"💵 **Current Market Price:** `{sig['price']:,.{spec['decimals']}f}`\n"
+            f"🏛 **Macro Bias:** {sig['htf_bias']}\n"
+            f"🏷 **Setup Classification:** `{sig['trade_type']}`\n\n"
+            f"💡 **Directive:** {sig['signal']}\n"
+            f"• **Entry Price:** `{sig['price']:,.{spec['decimals']}f}`\n"
+            f"• **Stop Loss:** `{sig['sl_price']:,.{spec['decimals']}f}` *({pips_sl} {spec['unit']})*\n"
+            f"• **Take Profit:** `{sig['tp_price']:,.{spec['decimals']}f}` *({pips_tp} {spec['unit']})*\n\n"
+            f"📝 **Analytic Context:** {sig['note']}\n\n"
+            f"👇 **Select Risk Exposure Profile for Standard Lot Sizing:**"
         )
-        return
 
-    if sig.get('is_sideways'):
-        bot.send_message(message.chat.id, sig['text'], reply_markup=get_main_dashboard(), parse_mode="Markdown")
-        return
+        markup = InlineKeyboardMarkup(row_width=3)
+        b_low = InlineKeyboardButton("🛡 Conservative (0.5%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_0.5_{active_balance}")
+        b_std = InlineKeyboardButton("⚖️ Standard (1.0%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_1.0_{active_balance}")
+        b_high = InlineKeyboardButton("🚀 Aggressive (2.0%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_2.0_{active_balance}")
+        markup.add(b_low, b_std, b_high)
 
-    spec = sig['spec']
-    pips_sl = int(sig['sl_dist'] * spec['pip_factor'])
-    pips_tp = int(sig['tp_dist'] * spec['pip_factor'])
-
-    card = (
-        f"💎 **STANDARD ACCOUNT SIGNAL MATRIX — {sig['name']}**\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"⏱ **Profile Matrix:** `{sig['profile_label']}`\n"
-        f"💵 **Current Market Price:** `{sig['price']:,.{spec['decimals']}f}`\n"
-        f"🏛 **Macro Bias:** {sig['htf_bias']}\n"
-        f"🏷 **Setup Classification:** `{sig['trade_type']}`\n\n"
-        f"💡 **Directive:** {sig['signal']}\n"
-        f"• **Entry Price:** `{sig['price']:,.{spec['decimals']}f}`\n"
-        f"• **Stop Loss:** `{sig['sl_price']:,.{spec['decimals']}f}` *({pips_sl} {spec['unit']})*\n"
-        f"• **Take Profit:** `{sig['tp_price']:,.{spec['decimals']}f}` *({pips_tp} {spec['unit']})*\n\n"
-        f"📝 **Analytic Context:** {sig['note']}\n\n"
-        f"👇 **Select Risk Exposure Profile for Standard Lot Sizing:**"
-    )
-
-    markup = InlineKeyboardMarkup(row_width=3)
-    b_low = InlineKeyboardButton("🛡 Conservative (0.5%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_0.5_{active_balance}")
-    b_std = InlineKeyboardButton("⚖️ Standard (1.0%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_1.0_{active_balance}")
-    b_high = InlineKeyboardButton("🚀 Aggressive (2.0%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_2.0_{active_balance}")
-    markup.add(b_low, b_std, b_high)
-
-    bot.send_message(message.chat.id, card, reply_markup=markup, parse_mode="Markdown")
+        bot.send_message(message.chat.id, card, reply_markup=markup, parse_mode="Markdown")
+    except Exception as e:
+        print(f"Signal request error: {e}")
 
 @bot.message_handler(func=lambda msg: msg.text in ["🥇 Gold (XAUUSD)", "/gold"])
 def handle_gold(message):
-    bot.send_message(message.chat.id, "🥇 **Gold (XAU/USD) — Select Timeframe Profile:**", reply_markup=get_timeframe_selector("XAU/USD"), parse_mode="Markdown")
+    bot.send_message(
+        message.chat.id,
+        "🥇 **Gold (XAU/USD) — Select Timeframe Profile:**",
+        reply_markup=get_timeframe_selector("XAU/USD"),
+        parse_mode="Markdown"
+    )
 
 @bot.message_handler(func=lambda msg: msg.text == "📊 Forex Markets (Top 6)")
 def handle_forex_menu(message):
@@ -499,7 +514,9 @@ def handle_profile_selection_callback(call):
         class MockMessage:
             def __init__(self, chat_id):
                 self.chat = type('obj', (object,), {'id': chat_id})
-        process_signal_request(MockMessage(call.message.chat.id), symbol, profile_type)
+        
+        # Run signal analysis in background thread so callback query doesn't freeze
+        threading.Thread(target=process_signal_request, args=(MockMessage(call.message.chat.id), symbol, profile_type)).start()
     except Exception as e:
         print(f"Profile selection callback error: {e}")
 
