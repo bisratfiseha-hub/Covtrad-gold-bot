@@ -167,15 +167,6 @@ def get_crypto_submenu():
     )
     return markup
 
-def get_timeframe_selector(symbol):
-    markup = InlineKeyboardMarkup(row_width=1)
-    markup.add(
-        InlineKeyboardButton("⚡ Scalping Mode (1H / 5M)", callback_data=f"profile_{symbol}_scalp"),
-        InlineKeyboardButton("📊 Day Trading Mode (4H / 15M)", callback_data=f"profile_{symbol}_day"),
-        InlineKeyboardButton("🌊 Swing Trading Mode (Daily / 1H)", callback_data=f"profile_{symbol}_swing")
-    )
-    return markup
-
 def get_balance_presets():
     markup = InlineKeyboardMarkup(row_width=3)
     b1 = InlineKeyboardButton("$20 USD", callback_data="setbal_20")
@@ -244,24 +235,10 @@ def fetch_tf_data(symbol, interval):
         print(f"Error fetching {interval} for {symbol}: {e}")
         return None
 
-def generate_multi_timeframe_signal(symbol, profile_type="day"):
-    # Map profiles to intervals and distance multipliers
-    if profile_type == "scalp":
-        macro_tf, ltf_tf = "1h", "5min"
-        profile_label = "Scalping (1H / 5M)"
-        mult = 0.6
-    elif profile_type == "swing":
-        macro_tf, ltf_tf = "1day", "1h"
-        profile_label = "Swing Trading (Daily / 1H)"
-        mult = 2.0
-    else:  # default day trading
-        macro_tf, ltf_tf = "4h", "15min"
-        profile_label = "Day Trading (4H / 15M)"
-        mult = 1.0
-
-    htf_data = fetch_tf_data(symbol, macro_tf)
-    time.sleep(0.4)
-    ltf_data = fetch_tf_data(symbol, ltf_tf)
+def generate_multi_timeframe_signal(symbol):
+    htf_data = fetch_tf_data(symbol, "4h")
+    time.sleep(0.5)
+    ltf_data = fetch_tf_data(symbol, "15min")
 
     if not htf_data or not ltf_data:
         return None
@@ -271,7 +248,7 @@ def generate_multi_timeframe_signal(symbol, profile_type="day"):
     htf = htf_data
     ltf = ltf_data
 
-    # --- 1. DEFINE MACRO BIAS ---
+    # --- 1. DEFINE MACRO BIAS (4H) ---
     if htf['rsi'] > 55 and htf['sma20'] > htf['sma50']:
         htf_bias = "BULLISH 🟢"
     elif htf['rsi'] < 45 and htf['sma20'] < htf['sma50']:
@@ -279,23 +256,22 @@ def generate_multi_timeframe_signal(symbol, profile_type="day"):
     else:
         htf_bias = "RANGING / CHOPPY ⚪"
 
-    # --- 2. DEFINE EXECUTION MOMENTUM ---
+    # --- 2. DEFINE EXECUTION MOMENTUM (15M) ---
     ltf_bullish = ltf['sma20'] > ltf['sma50'] and ltf['rsi'] > 52
     ltf_bearish = ltf['sma20'] < ltf['sma50'] and ltf['rsi'] < 48
 
-    sl_dist = spec['trend_sl'] * mult
-    tp_dist = spec['trend_tp'] * mult
-
-    # --- 3. STRICT CONFLUENCE GATE ---
+    # --- 3. STRICT CONFLUENCE GATE (CAPITAL PROTECTION) ---
     if "BULLISH" in htf_bias and ltf_bullish:
         trade_type = "TREND CONTINUATION"
         signal = "BUY / LONG 🟢"
-        note = f"High Confluence [{profile_label}]: Macro & Execution aligned upward."
+        sl_dist, tp_dist = spec['trend_sl'], spec['trend_tp']
+        note = "High Confluence: 4H Macro & 15M Execution are fully aligned upward."
 
     elif "BEARISH" in htf_bias and ltf_bearish:
         trade_type = "TREND CONTINUATION"
         signal = "SELL / SHORT 🔴"
-        note = f"High Confluence [{profile_label}]: Macro & Execution aligned downward."
+        sl_dist, tp_dist = spec['trend_sl'], spec['trend_tp']
+        note = "High Confluence: 4H Macro & 15M Execution are fully aligned downward."
 
     else:
         return {
@@ -303,11 +279,11 @@ def generate_multi_timeframe_signal(symbol, profile_type="day"):
             "text": (
                 f"🚫 **NO TRADE ZONE — {spec['name']}**\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"⏱ **Profile Matrix:** `{profile_label}`\n"
+                f"⏱ **Timeframe Matrix:** `4H (Macro) & 15M (Execution)`\n"
                 f"💵 **Current Price:** `{price:,.{spec['decimals']}f}`\n"
-                f"🏛 **Macro Bias:** {htf_bias}\n"
-                f"📈 **Momentum RSI:** `{ltf['rsi']:.1f}`\n\n"
-                f"🛑 **Strategy Verdict:** *Market conditions conflict under this timeframe profile. **Stand aside and protect capital.***"
+                f"🏛 **4H Macro Bias:** {htf_bias}\n"
+                f"📈 **15M Momentum RSI:** `{ltf['rsi']:.1f}`\n\n"
+                f"🛑 **Strategy Verdict:** *Market conditions are conflicting or choppy. No institutional edge detected. **Stand aside and protect capital.***"
             )
         }
 
@@ -326,7 +302,6 @@ def generate_multi_timeframe_signal(symbol, profile_type="day"):
         "htf_bias": htf_bias,
         "trade_type": trade_type,
         "signal": signal,
-        "profile_label": profile_label,
         "sl_price": sl_price,
         "tp_price": tp_price,
         "sl_dist": sl_dist,
@@ -344,16 +319,16 @@ def send_welcome(message):
         "📈 **INSTANT TRADING TERMINAL ACTIVE**\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"💳 **Assigned Capital:** `${current_bal:,.2f} USD`\n"
-        "⚡ **Engine Status:** Beta 2.5 Multi-Profile Confluence Active.\n\n"
+        "⚡ **Engine Status:** Beta 2.0 Strict Confluence Active.\n\n"
         "Select an asset category below:"
     )
     bot.send_message(message.chat.id, msg, reply_markup=get_main_dashboard(), parse_mode="Markdown")
 
-def process_signal_request(message, symbol, profile_type="day"):
+def process_signal_request(message, symbol):
     bot.send_chat_action(message.chat.id, 'typing')
     active_balance = get_user_balance(message.chat.id)
 
-    sig = generate_multi_timeframe_signal(symbol, profile_type)
+    sig = generate_multi_timeframe_signal(symbol)
 
     if not sig:
         bot.send_message(
@@ -373,11 +348,11 @@ def process_signal_request(message, symbol, profile_type="day"):
     pips_tp = int(sig['tp_dist'] * spec['pip_factor'])
 
     card = (
-        f"💎 **BETA 2.5 SIGNAL MATRIX — {sig['name']}**\n"
+        f"💎 **BETA 2.0 SIGNAL MATRIX — {sig['name']}**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"⏱ **Profile Matrix:** `{sig['profile_label']}`\n"
+        f"⏱ **Timeframe Matrix:** `4H (Macro) & 15M (Execution)`\n"
         f"💵 **Current Market Price:** `{sig['price']:,.{spec['decimals']}f}`\n"
-        f"🏛 **Macro Bias:** {sig['htf_bias']}\n"
+        f"🏛 **Macro Bias (4H):** {sig['htf_bias']}\n"
         f"🏷 **Setup Classification:** `{sig['trade_type']}`\n\n"
         f"💡 **Directive:** {sig['signal']}\n"
         f"• **Entry Price:** `{sig['price']:,.{spec['decimals']}f}`\n"
@@ -397,12 +372,7 @@ def process_signal_request(message, symbol, profile_type="day"):
 
 @bot.message_handler(func=lambda msg: msg.text in ["🥇 Gold (XAUUSDc)", "/gold"])
 def handle_gold(message):
-    bot.send_message(
-        message.chat.id,
-        "🥇 **Gold (XAU/USD) — Select Timeframe Profile:**",
-        reply_markup=get_timeframe_selector("XAU/USD"),
-        parse_mode="Markdown"
-    )
+    process_signal_request(message, "XAU/USD")
 
 @bot.message_handler(func=lambda msg: msg.text == "📊 Forex Markets (Top 6)")
 def handle_forex_menu(message):
@@ -436,10 +406,10 @@ def handle_balance_menu(message):
 def handle_bot_info(message):
     current_bal = get_user_balance(message.chat.id)
     info_text = (
-        "⚙️ **System Diagnostic Matrix (Beta 2.5)**\n"
+        "⚙️ **System Diagnostic Matrix (Beta 2.0)**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "• **Active Feeds:** 11 Instruments (Forex, Crypto, Metals)\n"
-        "• **Surveillance Mode:** On-Demand with Multi-Profile Timeframes\n"
+        "• **Surveillance Mode:** On-Demand with Confluence Filtering\n"
         "• **Risk Parameters:** 0.25% / 1.0% / 5.0% Exposure Tiers\n"
         f"• **Configured Capital:** `${current_bal:,.2f} USD`\n"
         "• **System Status:** Fully Operational 🟢"
@@ -463,33 +433,13 @@ def handle_raw_number_balance(message):
 def handle_asset_selection_callback(call):
     try:
         symbol = call.data.split('_', 1)[1]
-        bot.answer_callback_query(call.id, text=f"Selected {symbol}. Choose profile:")
-        bot.edit_message_text(
-            f"⏱ **Select Timeframe Profile for `{symbol}`:**",
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            reply_markup=get_timeframe_selector(symbol),
-            parse_mode="Markdown"
-        )
-    except Exception as e:
-        print(f"Asset selection callback error: {e}")
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('profile_'))
-def handle_profile_selection_callback(call):
-    try:
-        parts = call.data.split('_')
-        # format: profile_<symbol_part1>_<symbol_part2>_<profile> or similar
-        # For pairs like EUR/USD, split produces ['profile', 'EUR', 'USD', 'scalp']
-        profile_type = parts[-1]
-        symbol = "/".join(parts[1:-1])
-
-        bot.answer_callback_query(call.id, text=f"Analyzing {symbol} ({profile_type})...")
+        bot.answer_callback_query(call.id, text=f"Analyzing {symbol}...")
         class MockMessage:
             def __init__(self, chat_id):
                 self.chat = type('obj', (object,), {'id': chat_id})
-        process_signal_request(MockMessage(call.message.chat.id), symbol, profile_type)
+        process_signal_request(MockMessage(call.message.chat.id), symbol)
     except Exception as e:
-        print(f"Profile selection callback error: {e}")
+        print(f"Asset selection callback error: {e}")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('setbal_'))
 def handle_preset_balance(call):
@@ -509,8 +459,7 @@ def handle_preset_balance(call):
 @bot.callback_query_handler(func=lambda call: call.data.startswith('calc_'))
 def handle_lot_calculation(call):
     try:
-        _, symbol_part1, symbol_part2, sl_dist, tp_dist, risk_pct, active_balance = call.data.split('_')
-        symbol = f"{symbol_part1}/{symbol_part2}"
+        _, symbol, sl_dist, tp_dist, risk_pct, active_balance = call.data.split('_')
         sl_dist = float(sl_dist)
         tp_dist = float(tp_dist)
         risk_pct = float(risk_pct)
@@ -550,7 +499,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Beta 2.5 Multi-Profile Institutional Terminal is active and operational."
+    return "Beta 2.0 Institutional Multi-Asset Sniper Terminal is active and operational."
 
 if __name__ == "__main__":
     bot_thread = threading.Thread(target=run_bot)
