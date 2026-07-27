@@ -33,31 +33,37 @@ ASSET_SPECS = {
     "EUR/USD": {
         "name": "EUR/USD (Euro Cent)",
         "trend_sl": 0.0025,  "trend_tp": 0.0050,
+        "scalp_sl": 0.0012,  "scalp_tp": 0.0020,
         "contract_size": 1.0, "pip_factor": 10000, "unit": "pips", "decimals": 5
     },
     "GBP/USD": {
         "name": "GBP/USD (Cable Cent)",
         "trend_sl": 0.0030,  "trend_tp": 0.0060,
+        "scalp_sl": 0.0015,  "scalp_tp": 0.0025,
         "contract_size": 1.0, "pip_factor": 10000, "unit": "pips", "decimals": 5
     },
     "USD/JPY": {
         "name": "USD/JPY (Yen Cent)",
         "trend_sl": 0.35,    "trend_tp": 0.70,
+        "scalp_sl": 0.18,    "scalp_tp": 0.30,
         "contract_size": 1.0, "pip_factor": 100,   "unit": "pips", "decimals": 3
     },
     "AUD/USD": {
         "name": "AUD/USD (Aussie Cent)",
         "trend_sl": 0.0025,  "trend_tp": 0.0050,
+        "scalp_sl": 0.0012,  "scalp_tp": 0.0020,
         "contract_size": 1.0, "pip_factor": 10000, "unit": "pips", "decimals": 5
     },
     "USD/CAD": {
         "name": "USD/CAD (Loonie Cent)",
         "trend_sl": 0.0025,  "trend_tp": 0.0050,
+        "scalp_sl": 0.0012,  "scalp_tp": 0.0020,
         "contract_size": 1.0, "pip_factor": 10000, "unit": "pips", "decimals": 5
     },
     "GBP/JPY": {
         "name": "GBP/JPY (Ninja Cent)",
         "trend_sl": 0.45,    "trend_tp": 0.90,
+        "scalp_sl": 0.22,    "scalp_tp": 0.40,
         "contract_size": 1.0, "pip_factor": 100,   "unit": "pips", "decimals": 3
     },
     
@@ -65,21 +71,25 @@ ASSET_SPECS = {
     "BTC/USD": {
         "name": "BTC/USD (Bitcoin Cent)",
         "trend_sl": 1200.00, "trend_tp": 2400.00,
+        "scalp_sl": 600.00,  "scalp_tp": 1000.00,
         "contract_size": 1.0, "pip_factor": 1,   "unit": "points", "decimals": 2
     },
     "ETH/USD": {
         "name": "ETH/USD (Ethereum Cent)",
         "trend_sl": 80.00,   "trend_tp": 160.00,
+        "scalp_sl": 40.00,   "scalp_tp": 70.00,
         "contract_size": 1.0, "pip_factor": 1,   "unit": "points", "decimals": 2
     },
     "SOL/USD": {
         "name": "SOL/USD (Solana Cent)",
         "trend_sl": 5.00,    "trend_tp": 10.00,
+        "scalp_sl": 2.50,    "scalp_tp": 4.50,
         "contract_size": 1.0, "pip_factor": 1,   "unit": "points", "decimals": 2
     },
     "XRP/USD": {
         "name": "XRP/USD (Ripple Cent)",
         "trend_sl": 0.03,    "trend_tp": 0.06,
+        "scalp_sl": 0.015,   "scalp_tp": 0.025,
         "contract_size": 1.0, "pip_factor": 10000, "unit": "pips", "decimals": 4
     },
 
@@ -87,6 +97,7 @@ ASSET_SPECS = {
     "XAU/USD": {
         "name": "XAU/USD (Gold Cent)",
         "trend_sl": 3.50,    "trend_tp": 7.00,
+        "scalp_sl": 2.00,    "scalp_tp": 3.00,
         "contract_size": 1.0, "pip_factor": 100, "unit": "pips", "decimals": 2
     }
 }
@@ -133,7 +144,7 @@ def set_user_balance(chat_id, balance):
 
 init_db()
 
-# --- STREAMLINED DASHBOARD LAYOUT ---
+# --- STREAMLINED BETA 1 STYLE DASHBOARD ---
 
 def get_main_dashboard():
     markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
@@ -186,7 +197,7 @@ def parse_raw_amount(text):
     except ValueError:
         return None
 
-# --- TECHNICAL ANALYSIS ENGINE (STRICT CONFLUENCE GATE) ---
+# --- TECHNICAL ANALYSIS ENGINE (ON-DEMAND) ---
 
 def calculate_sma(prices, period):
     if len(prices) < period:
@@ -248,42 +259,63 @@ def generate_multi_timeframe_signal(symbol):
     htf = htf_data
     ltf = ltf_data
 
-    # --- 1. DEFINE MACRO BIAS (4H) ---
-    if htf['rsi'] > 55 and htf['sma20'] > htf['sma50']:
+    if 45.0 <= htf['rsi'] <= 55.0 or abs(htf['sma20'] - htf['sma50']) / price < 0.0005:
+        htf_bias = "RANGING / NEUTRAL ⚪"
+    elif htf['sma20'] > htf['sma50']:
         htf_bias = "BULLISH 🟢"
-    elif htf['rsi'] < 45 and htf['sma20'] < htf['sma50']:
-        htf_bias = "BEARISH 🔴"
     else:
-        htf_bias = "RANGING / CHOPPY ⚪"
+        htf_bias = "BEARISH 🔴"
 
-    # --- 2. DEFINE EXECUTION MOMENTUM (15M) ---
-    ltf_bullish = ltf['sma20'] > ltf['sma50'] and ltf['rsi'] > 52
-    ltf_bearish = ltf['sma20'] < ltf['sma50'] and ltf['rsi'] < 48
+    ltf_bullish = ltf['sma20'] > ltf['sma50'] and ltf['rsi'] > 50
+    ltf_bearish = ltf['sma20'] < ltf['sma50'] and ltf['rsi'] < 50
 
-    # --- 3. STRICT CONFLUENCE GATE (CAPITAL PROTECTION) ---
     if "BULLISH" in htf_bias and ltf_bullish:
         trade_type = "TREND CONTINUATION"
         signal = "BUY / LONG 🟢"
         sl_dist, tp_dist = spec['trend_sl'], spec['trend_tp']
-        note = "High Confluence: 4H Macro & 15M Execution are fully aligned upward."
+        note = "Multi-timeframe structural alignment confirmed (4H & 15M)."
 
     elif "BEARISH" in htf_bias and ltf_bearish:
         trade_type = "TREND CONTINUATION"
         signal = "SELL / SHORT 🔴"
         sl_dist, tp_dist = spec['trend_sl'], spec['trend_tp']
-        note = "High Confluence: 4H Macro & 15M Execution are fully aligned downward."
+        note = "Multi-timeframe structural alignment confirmed (4H & 15M)."
+
+    elif "BULLISH" in htf_bias and ltf_bearish:
+        trade_type = "COUNTER-TREND SCALP"
+        signal = "SELL / SHORT (SCALP) 🟡"
+        sl_dist, tp_dist = spec['scalp_sl'], spec['scalp_tp']
+        note = "Counter-trend volatility capture against 4H macro bias."
+
+    elif "BEARISH" in htf_bias and ltf_bullish:
+        trade_type = "COUNTER-TREND SCALP"
+        signal = "BUY / LONG (SCALP) 🟡"
+        sl_dist, tp_dist = spec['scalp_sl'], spec['scalp_tp']
+        note = "Counter-trend volatility capture against 4H macro bias."
+
+    elif "RANGING" in htf_bias and ltf_bullish:
+        trade_type = "RANGE BREAKOUT"
+        signal = "BUY / LONG (SCALP) 🟢"
+        sl_dist, tp_dist = spec['scalp_sl'], spec['scalp_tp']
+        note = "Consolidation break with high-momentum 15M expansion."
+
+    elif "RANGING" in htf_bias and ltf_bearish:
+        trade_type = "RANGE BREAKOUT"
+        signal = "SELL / SHORT (SCALP) 🔴"
+        sl_dist, tp_dist = spec['scalp_sl'], spec['scalp_tp']
+        note = "Consolidation break with high-momentum 15M breakdown."
 
     else:
         return {
             "is_sideways": True,
             "text": (
-                f"🚫 **NO TRADE ZONE — {spec['name']}**\n"
+                f"📊 **MARKET PROFILE — {spec['name']}**\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"⏱ **Timeframe Matrix:** `4H (Macro) & 15M (Execution)`\n"
-                f"💵 **Current Price:** `{price:,.{spec['decimals']}f}`\n"
-                f"🏛 **4H Macro Bias:** {htf_bias}\n"
-                f"📈 **15M Momentum RSI:** `{ltf['rsi']:.1f}`\n\n"
-                f"🛑 **Strategy Verdict:** *Market conditions are conflicting or choppy. No institutional edge detected. **Stand aside and protect capital.***"
+                f"💵 **Current Market Price:** `{price:,.{spec['decimals']}f}`\n"
+                f"🏛 **4H Macro Context:** {htf_bias}\n"
+                f"📈 **15M Momentum (RSI):** `{ltf['rsi']:.1f}`\n\n"
+                f"⏳ **Status:** *Consolidation zone detected. Awaiting directional expansion trigger.*"
             )
         }
 
@@ -319,7 +351,7 @@ def send_welcome(message):
         "📈 **INSTANT TRADING TERMINAL ACTIVE**\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"💳 **Assigned Capital:** `${current_bal:,.2f} USD`\n"
-        "⚡ **Engine Status:** Strict Confluence Filtering Enabled.\n\n"
+        "⚡ **Engine Status:** On-demand analysis ready across Forex, Crypto, & Metals.\n\n"
         "Select an asset category below:"
     )
     bot.send_message(message.chat.id, msg, reply_markup=get_main_dashboard(), parse_mode="Markdown")
@@ -409,7 +441,7 @@ def handle_bot_info(message):
         "⚙️ **System Diagnostic Matrix**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "• **Active Feeds:** 11 Instruments (Forex, Crypto, Metals)\n"
-        "• **Surveillance Mode:** On-Demand with Confluence Filtering\n"
+        "• **Surveillance Mode:** On-Demand (Zero API Rate-Limit Lag)\n"
         "• **Risk Parameters:** 0.25% / 1.0% / 5.0% Exposure Tiers\n"
         f"• **Configured Capital:** `${current_bal:,.2f} USD`\n"
         "• **System Status:** Fully Operational 🟢"
