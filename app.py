@@ -16,7 +16,7 @@ from telebot.types import (
 BOT_TOKEN = os.environ.get('BOT_TOKEN', 'YOUR_TELEGRAM_BOT_TOKEN_HERE')
 TWELVE_DATA_KEY = os.environ.get('TWELVE_DATA_API_KEY', '')
 
-DEFAULT_BALANCE = 500.0  # Standard accounts typically start with higher baseline capital
+DEFAULT_BALANCE = 500.0  
 DB_NAME = "bot_data.db"
 
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -192,6 +192,8 @@ def get_balance_presets():
     return markup
 
 def parse_raw_amount(text):
+    if not text:
+        return None
     cleaned = text.replace('$', '').replace(',', '').strip()
     try:
         val = float(cleaned)
@@ -199,7 +201,7 @@ def parse_raw_amount(text):
     except ValueError:
         return None
 
-# --- TECHNICAL ANALYSIS ENGINE (STRICT CONFLUENCE GATE) ---
+# --- TECHNICAL ANALYSIS ENGINE ---
 
 def calculate_sma(prices, period):
     if len(prices) < period:
@@ -274,7 +276,6 @@ def generate_multi_timeframe_signal(symbol, profile_type="day"):
     htf = htf_data
     ltf = ltf_data
 
-    # --- 1. DEFINE MACRO BIAS ---
     if htf['rsi'] > 55 and htf['sma20'] > htf['sma50']:
         htf_bias = "BULLISH 🟢"
     elif htf['rsi'] < 45 and htf['sma20'] < htf['sma50']:
@@ -282,24 +283,20 @@ def generate_multi_timeframe_signal(symbol, profile_type="day"):
     else:
         htf_bias = "RANGING / CHOPPY ⚪"
 
-    # --- 2. DEFINE EXECUTION MOMENTUM ---
     ltf_bullish = ltf['sma20'] > ltf['sma50'] and ltf['rsi'] > 52
     ltf_bearish = ltf['sma20'] < ltf['sma50'] and ltf['rsi'] < 48
 
     sl_dist = spec['trend_sl'] * mult
     tp_dist = spec['trend_tp'] * mult
 
-    # --- 3. STRICT CONFLUENCE GATE ---
     if "BULLISH" in htf_bias and ltf_bullish:
         trade_type = "TREND CONTINUATION"
         signal = "BUY / LONG 🟢"
         note = f"High Confluence [{profile_label}]: Macro & Execution aligned upward."
-
     elif "BEARISH" in htf_bias and ltf_bearish:
         trade_type = "TREND CONTINUATION"
         signal = "SELL / SHORT 🔴"
         note = f"High Confluence [{profile_label}]: Macro & Execution aligned downward."
-
     else:
         return {
             "is_sideways": True,
@@ -313,7 +310,7 @@ def generate_multi_timeframe_signal(symbol, profile_type="day"):
                 f"💵 **Current Price:** `{price:,.{spec['decimals']}f}`\n"
                 f"🏛 **Macro Bias:** {htf_bias}\n"
                 f"📈 **Momentum RSI:** `{ltf['rsi']:.1f}`\n\n"
-                f"🛑 **Strategy Verdict:** *Market conditions conflict under this timeframe profile. **Stand aside and protect capital.***"
+                f"🛑 **Strategy Verdict:** *Market conditions conflict under this timeframe profile. Stand aside and protect capital.*"
             )
         }
 
@@ -384,7 +381,6 @@ def handle_top_3_scan(message):
             scan_report += f"  Directive: **{sig['signal']}**\n\n"
             
     scan_report += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n💡 *Select individual asset categories below for standard position sizing.*"
-    
     bot.send_message(message.chat.id, scan_report, reply_markup=get_main_dashboard(), parse_mode="Markdown")
 
 def process_signal_request(message, symbol, profile_type="day"):
@@ -444,21 +440,11 @@ def handle_gold(message):
 
 @bot.message_handler(func=lambda msg: msg.text == "📊 Forex Markets (Top 6)")
 def handle_forex_menu(message):
-    bot.send_message(
-        message.chat.id, 
-        "📊 **Select Volatile Forex Pair:**", 
-        reply_markup=get_forex_submenu(), 
-        parse_mode="Markdown"
-    )
+    bot.send_message(message.chat.id, "📊 **Select Volatile Forex Pair:**", reply_markup=get_forex_submenu(), parse_mode="Markdown")
 
 @bot.message_handler(func=lambda msg: msg.text == "🪙 Crypto Assets")
 def handle_crypto_menu(message):
-    bot.send_message(
-        message.chat.id, 
-        "🪙 **Select Crypto Asset:**", 
-        reply_markup=get_crypto_submenu(), 
-        parse_mode="Markdown"
-    )
+    bot.send_message(message.chat.id, "🪙 **Select Crypto Asset:**", reply_markup=get_crypto_submenu(), parse_mode="Markdown")
 
 @bot.message_handler(func=lambda msg: msg.text in ["💳 Configure Capital", "/setbalance"])
 def handle_balance_menu(message):
@@ -486,11 +472,13 @@ def handle_bot_info(message):
 
 @bot.message_handler(func=lambda msg: parse_raw_amount(msg.text) is not None)
 def handle_raw_number_balance(message):
-    new_bal = parse_raw_amount(msg.text)
+    new_bal = parse_raw_amount(message.text)
     set_user_balance(message.chat.id, new_bal)
+    
+    # FIXED: Wrapped amount in backticks to prevent Telegram Markdown parsing errors with '$'
     bot.reply_to(
         message, 
-        f"✅ Capital database updated successfully. Active baseline: **${new_bal:,.2f} USD**", 
+        f"✅ Capital database updated successfully. Active baseline: **`${new_bal:,.2f}` USD**", 
         reply_markup=get_main_dashboard(), 
         parse_mode="Markdown"
     )
@@ -535,7 +523,7 @@ def handle_preset_balance(call):
         bot.answer_callback_query(call.id, text=f"Capital updated to ${new_bal:,.2f} USD")
         bot.send_message(
             call.message.chat.id, 
-            f"✅ Capital baseline reconfigured to **${new_bal:,.2f} USD**", 
+            f"✅ Capital baseline reconfigured to **`${new_bal:,.2f}` USD**", 
             reply_markup=get_main_dashboard(), 
             parse_mode="Markdown"
         )
@@ -557,7 +545,6 @@ def handle_lot_calculation(call):
         risk_dollars = active_balance * (risk_pct / 100.0)
         reward_dollars = risk_dollars * (tp_dist / sl_dist)
         
-        # Standard lot calculation: Risk ($) / (Stop Loss distance * Contract Size)
         standard_lot_size = risk_dollars / (sl_dist * spec['contract_size'])
         pips_tp = int(tp_dist * spec['pip_factor'])
 
