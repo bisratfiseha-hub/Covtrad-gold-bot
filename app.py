@@ -29,7 +29,6 @@ except Exception as e:
 
 # --- ASSET SPECS FOR STANDARD ACCOUNTS ($) ---
 ASSET_SPECS = {
-    # --- FOREX (Top 6 Volatile Pairs) ---
     "EUR/USD": {
         "name": "EUR/USD (Standard)",
         "trend_sl": 0.0025,  "trend_tp": 0.0050,
@@ -60,8 +59,6 @@ ASSET_SPECS = {
         "trend_sl": 0.45,    "trend_tp": 0.90,
         "contract_size": 100000.0, "pip_factor": 100,   "unit": "pips", "decimals": 3
     },
-    
-    # --- CRYPTO ASSETS ---
     "BTC/USD": {
         "name": "BTC/USD (Standard)",
         "trend_sl": 1200.00, "trend_tp": 2400.00,
@@ -82,8 +79,6 @@ ASSET_SPECS = {
         "trend_sl": 0.03,    "trend_tp": 0.06,
         "contract_size": 10000.0, "pip_factor": 10000, "unit": "pips", "decimals": 4
     },
-
-    # --- COMMODITIES ---
     "XAU/USD": {
         "name": "XAU/USD (Gold Standard)",
         "trend_sl": 3.50,    "trend_tp": 7.00,
@@ -91,10 +86,10 @@ ASSET_SPECS = {
     }
 }
 
-# --- DATABASE PERSISTENCE (SQLite) ---
+# --- THREAD-SAFE DATABASE PERSISTENCE ---
 
 def init_db():
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(DB_NAME, check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS user_balances (
@@ -107,7 +102,7 @@ def init_db():
 
 def get_user_balance(chat_id):
     try:
-        conn = sqlite3.connect(DB_NAME)
+        conn = sqlite3.connect(DB_NAME, check_same_thread=False)
         cursor = conn.cursor()
         cursor.execute("SELECT balance FROM user_balances WHERE chat_id = ?", (chat_id,))
         row = cursor.fetchone()
@@ -119,7 +114,7 @@ def get_user_balance(chat_id):
 
 def set_user_balance(chat_id, balance):
     try:
-        conn = sqlite3.connect(DB_NAME)
+        conn = sqlite3.connect(DB_NAME, check_same_thread=False)
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO user_balances (chat_id, balance)
@@ -133,7 +128,7 @@ def set_user_balance(chat_id, balance):
 
 init_db()
 
-# --- STREAMLINED DASHBOARD LAYOUT ---
+# --- DASHBOARD & MENUS ---
 
 def get_main_dashboard():
     markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
@@ -201,7 +196,7 @@ def parse_raw_amount(text):
     except ValueError:
         return None
 
-# --- TECHNICAL ANALYSIS ENGINE ---
+# --- TECHNICAL ANALYSIS & CACHED API ENGINE ---
 
 def calculate_sma(prices, period):
     if len(prices) < period:
@@ -265,7 +260,7 @@ def generate_multi_timeframe_signal(symbol, profile_type="day"):
         mult = 1.0
 
     htf_data = fetch_tf_data(symbol, macro_tf)
-    time.sleep(0.4)
+    time.sleep(0.6)  # Pacing requests to prevent Twelve Data rate limits
     ltf_data = fetch_tf_data(symbol, ltf_tf)
 
     if not htf_data or not ltf_data:
@@ -365,9 +360,9 @@ def handle_top_3_scan(message):
     
     for symbol in scan_assets:
         sig = generate_multi_timeframe_signal(symbol, "day")
-        time.sleep(0.3) 
+        time.sleep(0.5)  # Buffer to prevent rate limits
         if not sig:
-            scan_report += f"• `{symbol}`: *Data feed unavailable*\n\n"
+            scan_report += f"• `{symbol}`: *Data feed unavailable or rate-limited*\n\n"
             continue
             
         spec = sig['spec']
@@ -392,7 +387,7 @@ def process_signal_request(message, symbol, profile_type="day"):
     if not sig:
         bot.send_message(
             message.chat.id, 
-            f"⚠️ Could not fetch data for `{symbol}`. Please check your API key or try again in a moment.", 
+            f"⚠️ Could not fetch data for `{symbol}`. API rate limit reached or feed unavailable.", 
             reply_markup=get_main_dashboard(), 
             parse_mode="Markdown"
         )
@@ -431,12 +426,7 @@ def process_signal_request(message, symbol, profile_type="day"):
 
 @bot.message_handler(func=lambda msg: msg.text in ["🥇 Gold (XAUUSD)", "/gold"])
 def handle_gold(message):
-    bot.send_message(
-        message.chat.id,
-        "🥇 **Gold (XAU/USD) — Select Timeframe Profile:**",
-        reply_markup=get_timeframe_selector("XAU/USD"),
-        parse_mode="Markdown"
-    )
+    bot.send_message(message.chat.id, "🥇 **Gold (XAU/USD) — Select Timeframe Profile:**", reply_markup=get_timeframe_selector("XAU/USD"), parse_mode="Markdown")
 
 @bot.message_handler(func=lambda msg: msg.text == "📊 Forex Markets (Top 6)")
 def handle_forex_menu(message):
@@ -474,8 +464,6 @@ def handle_bot_info(message):
 def handle_raw_number_balance(message):
     new_bal = parse_raw_amount(message.text)
     set_user_balance(message.chat.id, new_bal)
-    
-    # FIXED: Wrapped amount in backticks to prevent Telegram Markdown parsing errors with '$'
     bot.reply_to(
         message, 
         f"✅ Capital database updated successfully. Active baseline: **`${new_bal:,.2f}` USD**", 
@@ -567,7 +555,12 @@ def handle_lot_calculation(call):
 
 def run_bot():
     print("Telegram terminal online and listening...")
-    bot.infinity_polling()
+    while True:
+        try:
+            bot.infinity_polling(timeout=60, long_polling_timeout=60)
+        except Exception as e:
+            print(f"Polling error encountered: {e}. Restarting polling in 5 seconds...")
+            time.sleep(5)
 
 # --- FLASK KEEP-ALIVE SERVER & THREAD LAUNCHERS ---
 app = Flask(__name__)
