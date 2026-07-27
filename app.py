@@ -209,37 +209,31 @@ def analyze_asset(asset_name, user_id):
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    markup.add(
-        types.KeyboardButton("🥇 XAU/USD"),
-        types.KeyboardButton("💶 EUR/USD"),
-        types.KeyboardButton("₿ BTC/USD"),
-        types.KeyboardButton("⚙️ Settings / Capital")
-    )
+    markup.add(types.KeyboardButton("🔍 Scan Markets"), types.KeyboardButton("⚙️ Settings / Capital"))
     bot.send_message(
         message.chat.id,
-        "🤖 **Professional API SMC Trading Bot**\n\n"
-        "Select an asset below for instant institutional scanning:",
+        "🤖 **Professional API SMC Trading Bot (Beta 2.0)**\n\n"
+        "Connected to Twelve Data & Binance REST APIs with institutional SMC logic and webhook auto-clearance.",
         reply_markup=markup,
         parse_mode="Markdown"
     )
 
-@bot.message_handler(func=lambda msg: msg.text == "🥇 XAU/USD")
-def scan_gold(message):
-    bot.send_message(message.chat.id, "Fetching live API feed for XAU/USD...", parse_mode="Markdown")
-    report = analyze_asset("XAU/USD", message.from_user.id)
-    bot.send_message(message.chat.id, report, parse_mode="Markdown")
+@bot.message_handler(func=lambda msg: msg.text == "🔍 Scan Markets")
+def asset_menu(message):
+    markup = types.InlineKeyboardMarkup(row_width=3)
+    markup.add(
+        types.InlineKeyboardButton("🥇 XAU/USD", callback_data="scan_XAU/USD"),
+        types.InlineKeyboardButton("💶 EUR/USD", callback_data="scan_EUR/USD"),
+        types.InlineKeyboardButton("₿ BTC/USD", callback_data="scan_BTC/USD")
+    )
+    bot.send_message(message.chat.id, "Select an asset for deep professional API SMC scanning:", reply_markup=markup)
 
-@bot.message_handler(func=lambda msg: msg.text == "💶 EUR/USD")
-def scan_eur(message):
-    bot.send_message(message.chat.id, "Fetching live API feed for EUR/USD...", parse_mode="Markdown")
-    report = analyze_asset("EUR/USD", message.from_user.id)
-    bot.send_message(message.chat.id, report, parse_mode="Markdown")
-
-@bot.message_handler(func=lambda msg: msg.text == "₿ BTC/USD")
-def scan_btc(message):
-    bot.send_message(message.chat.id, "Fetching live API feed for BTC/USD...", parse_mode="Markdown")
-    report = analyze_asset("BTC/USD", message.from_user.id)
-    bot.send_message(message.chat.id, report, parse_mode="Markdown")
+@bot.callback_query_handler(func=lambda call: call.data.startswith("scan_"))
+def handle_scan_callback(call):
+    asset = call.data.split("_")[1]
+    bot.answer_callback_query(call.id, text=f"Fetching live API feed for {asset}...")
+    report = analyze_asset(asset, call.from_user.id)
+    bot.send_message(call.message.chat.id, report, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda msg: msg.text == "⚙️ Settings / Capital")
 def settings_menu(message):
@@ -284,7 +278,7 @@ def set_risk(message):
 # ==================== FLASK KEEP-ALIVE SERVER ====================
 @app.route('/')
 def home():
-    return "SMC Professional API Trading Bot is active!"
+    return "SMC Professional API Trading Bot Beta 2.0 is active!"
 
 def run_flask():
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
@@ -295,5 +289,8 @@ if __name__ == "__main__":
     flask_thread.start()
     
     print("🤖 Starting Telegram Bot polling loop with Professional APIs...")
+    
+    # Clears any conflicting webhooks so the bot responds immediately
     bot.remove_webhook()
+    
     bot.infinity_polling()
