@@ -27,9 +27,20 @@ try:
 except Exception as e:
     print(f"Webhook reset notice: {e}")
 
-# --- IN-MEMORY CACHE TO PREVENT RATE LIMITING ---
+# --- IN-MEMORY CACHE & FAIL-SAFE SENDER ---
 API_CACHE = {}
 CACHE_TTL = 120  # Cache valid for 2 minutes
+
+def safe_send(chat_id, text, reply_markup=None, parse_mode="Markdown"):
+    """Fail-safe sender: if Markdown parsing fails, falls back to plain text instantly."""
+    try:
+        bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
+    except Exception as md_err:
+        print(f"Markdown parse warning ({md_err}), retrying as plain text...")
+        try:
+            bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=None)
+        except Exception as e:
+            print(f"Critical send error: {e}")
 
 # --- ASSET SPECS FOR STANDARD ACCOUNTS ($) ---
 ASSET_SPECS = {
@@ -200,7 +211,7 @@ def parse_raw_amount(text):
     except ValueError:
         return None
 
-# --- TECHNICAL ANALYSIS ENGINE WITH CACHING & ERROR SAFETY ---
+# --- TECHNICAL ANALYSIS ENGINE ---
 
 def calculate_sma(prices, period):
     if len(prices) < period:
@@ -232,6 +243,7 @@ def calculate_rsi(prices, period=14):
 
 def fetch_tf_data(symbol, interval):
     if not TWELVE_DATA_KEY:
+        print("ERROR: TWELVE_DATA_API_KEY is missing!")
         return None
     
     cache_key = f"{symbol}_{interval}"
@@ -243,10 +255,10 @@ def fetch_tf_data(symbol, interval):
 
     try:
         url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize=60&apikey={TWELVE_DATA_KEY}"
-        res = requests.get(url, timeout=6).json()
+        res = requests.get(url, timeout=7).json()
         
         if 'values' not in res:
-            print(f"API Warning for {symbol} ({interval}): {res.get('message', 'Unknown error / Rate limited')}")
+            print(f"API Warning for {symbol} ({interval}): {res}")
             return None
             
         closes = [float(item['close']) for item in res['values']]
@@ -276,7 +288,7 @@ def generate_multi_timeframe_signal(symbol, profile_type="day"):
         mult = 1.0
 
     htf_data = fetch_tf_data(symbol, macro_tf)
-    time.sleep(1.2)  # Strict pause to respect rate limits
+    time.sleep(1.0) 
     ltf_data = fetch_tf_data(symbol, ltf_tf)
 
     if not htf_data or not ltf_data:
@@ -349,7 +361,7 @@ def generate_multi_timeframe_signal(symbol, profile_type="day"):
         "spec": spec
     }
 
-# --- TELEGRAM HANDLERS (FULLY ISOLATED & THREADED) ---
+# --- TELEGRAM HANDLERS (GUARANTEED RESPONSE WRAPPERS) ---
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
@@ -358,10 +370,10 @@ def send_welcome(message):
         "📈 **STANDARD TRADING TERMINAL ACTIVE ($)**\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"💳 **Assigned Capital:** `${current_bal:,.2f} USD`\n"
-        "⚡ **Engine Status:** Beta 2.6 Multi-Profile Confluence Active.\n\n"
+        "⚡ **Engine Status:** Beta 2.7 Fail-Safe Active.\n\n"
         "Select an option below:"
     )
-    bot.send_message(message.chat.id, msg, reply_markup=get_main_dashboard(), parse_mode="Markdown")
+    safe_send(message.chat.id, msg, reply_markup=get_main_dashboard())
 
 @bot.message_handler(func=lambda msg: msg and msg.text and "Top 3 Pairs Scan" in msg.text)
 def handle_top_3_scan(message):
@@ -370,6 +382,11 @@ def handle_top_3_scan(message):
 def process_top_3_scan(message):
     try:
         bot.send_chat_action(message.chat.id, 'typing')
+        
+        if not TWELVE_DATA_KEY:
+            safe_send(message.chat.id, "⚠️ **Configuration Error:** `TWELVE_DATA_API_KEY` is not set in your environment variables.", reply_markup=get_main_dashboard())
+            return
+
         scan_assets = ["XAU/USD", "EUR/USD", "BTC/USD"]
         
         scan_report = (
@@ -380,9 +397,9 @@ def process_top_3_scan(message):
         
         for symbol in scan_assets:
             sig = generate_multi_timeframe_signal(symbol, "day")
-            time.sleep(1.0) # Safe pacing for API limits
+            time.sleep(1.2) 
             if not sig:
-                scan_report += f"• `{symbol}`: *Data feed temporarily rate-limited*\n\n"
+                scan_report += f"• `{symbol}`: *Data feed rate-limited or unavailable*\n\n"
                 continue
                 
             spec = sig['spec']
@@ -396,29 +413,32 @@ def process_top_3_scan(message):
                 scan_report += f"  Directive: **{sig['signal']}**\n\n"
                 
         scan_report += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n💡 *Select individual asset categories below for standard position sizing.*"
-        bot.send_message(message.chat.id, scan_report, reply_markup=get_main_dashboard(), parse_mode="Markdown")
+        safe_send(message.chat.id, scan_report, reply_markup=get_main_dashboard())
     except Exception as e:
-        print(f"Top 3 scan thread error: {e}")
-        bot.send_message(message.chat.id, "⚠️ Scan completed with partial data limits. Please try again in 30 seconds.", reply_markup=get_main_dashboard())
+        print(f"Top 3 scan fatal error: {e}")
+        safe_send(message.chat.id, f"⚠️ Scan encountered an error: {str(e)}", reply_markup=get_main_dashboard())
 
 def process_signal_request(message, symbol, profile_type="day"):
     try:
         bot.send_chat_action(message.chat.id, 'typing')
         active_balance = get_user_balance(message.chat.id)
 
+        if not TWELVE_DATA_KEY:
+            safe_send(message.chat.id, "⚠️ **Configuration Error:** `TWELVE_DATA_API_KEY` is not set.", reply_markup=get_main_dashboard())
+            return
+
         sig = generate_multi_timeframe_signal(symbol, profile_type)
 
         if not sig:
-            bot.send_message(
+            safe_send(
                 message.chat.id, 
-                f"⚠️ **API Rate Limit Reached:** Twelve Data free tier allows 8 requests/minute. Please wait 30 seconds before querying `{symbol}` again.", 
-                reply_markup=get_main_dashboard(), 
-                parse_mode="Markdown"
+                f"⚠️ **API Limit Reached / Feed Offline:** Twelve Data free tier allows 8 requests/minute. Please wait 30 seconds before querying `{symbol}`.", 
+                reply_markup=get_main_dashboard()
             )
             return
 
         if sig.get('is_sideways'):
-            bot.send_message(message.chat.id, sig['text'], reply_markup=get_main_dashboard(), parse_mode="Markdown")
+            safe_send(message.chat.id, sig['text'], reply_markup=get_main_dashboard())
             return
 
         spec = sig['spec']
@@ -446,26 +466,26 @@ def process_signal_request(message, symbol, profile_type="day"):
         b_high = InlineKeyboardButton("🚀 Aggressive (2.0%)", callback_data=f"calc_{symbol}_{sig['sl_dist']}_{sig['tp_dist']}_2.0_{active_balance}")
         markup.add(b_low, b_std, b_high)
 
-        bot.send_message(message.chat.id, card, reply_markup=markup, parse_mode="Markdown")
+        safe_send(message.chat.id, card, reply_markup=markup)
     except Exception as e:
-        print(f"Signal request thread error: {e}")
+        print(f"Signal request fatal error: {e}")
+        safe_send(message.chat.id, f"⚠️ Error generating signal for {symbol}.", reply_markup=get_main_dashboard())
 
 @bot.message_handler(func=lambda msg: msg.text in ["🥇 Gold (XAUUSD)", "/gold"])
 def handle_gold(message):
-    bot.send_message(
+    safe_send(
         message.chat.id,
         "🥇 **Gold (XAU/USD) — Select Timeframe Profile:**",
-        reply_markup=get_timeframe_selector("XAU/USD"),
-        parse_mode="Markdown"
+        reply_markup=get_timeframe_selector("XAU/USD")
     )
 
 @bot.message_handler(func=lambda msg: msg.text == "📊 Forex Markets (Top 6)")
 def handle_forex_menu(message):
-    bot.send_message(message.chat.id, "📊 **Select Volatile Forex Pair:**", reply_markup=get_forex_submenu(), parse_mode="Markdown")
+    safe_send(message.chat.id, "📊 **Select Volatile Forex Pair:**", reply_markup=get_forex_submenu())
 
 @bot.message_handler(func=lambda msg: msg.text == "🪙 Crypto Assets")
 def handle_crypto_menu(message):
-    bot.send_message(message.chat.id, "🪙 **Select Crypto Asset:**", reply_markup=get_crypto_submenu(), parse_mode="Markdown")
+    safe_send(message.chat.id, "🪙 **Select Crypto Asset:**", reply_markup=get_crypto_submenu())
 
 @bot.message_handler(func=lambda msg: msg.text in ["💳 Configure Capital", "/setbalance"])
 def handle_balance_menu(message):
@@ -475,7 +495,7 @@ def handle_balance_menu(message):
         f"Active Account Balance: **${current_bal:,.2f} USD**\n\n"
         "Select an institutional tier below or input exact decimal value directly (e.g. `1250.50`):"
     )
-    bot.send_message(message.chat.id, msg, reply_markup=get_balance_presets(), parse_mode="Markdown")
+    safe_send(message.chat.id, msg, reply_markup=get_balance_presets())
 
 @bot.message_handler(func=lambda msg: msg.text == "⚙️ Terminal Diagnostics")
 def handle_bot_info(message):
@@ -489,17 +509,16 @@ def handle_bot_info(message):
         f"• **Configured Capital:** `${current_bal:,.2f} USD`\n"
         "• **System Status:** Fully Operational 🟢"
     )
-    bot.send_message(message.chat.id, info_text, reply_markup=get_main_dashboard(), parse_mode="Markdown")
+    safe_send(message.chat.id, info_text, reply_markup=get_main_dashboard())
 
 @bot.message_handler(func=lambda msg: parse_raw_amount(msg.text) is not None)
 def handle_raw_number_balance(message):
     new_bal = parse_raw_amount(msg.text)
     set_user_balance(message.chat.id, new_bal)
-    bot.reply_to(
-        message, 
+    safe_send(
+        message.chat.id, 
         f"✅ Capital database updated successfully. Active baseline: **`${new_bal:,.2f}` USD**", 
-        reply_markup=get_main_dashboard(), 
-        parse_mode="Markdown"
+        reply_markup=get_main_dashboard()
     )
 
 # --- INLINE CALLBACK HANDLERS ---
@@ -541,11 +560,10 @@ def handle_preset_balance(call):
         new_bal = float(call.data.split('_')[1])
         set_user_balance(call.message.chat.id, new_bal)
         bot.answer_callback_query(call.id, text=f"Capital updated to ${new_bal:,.2f} USD")
-        bot.send_message(
+        safe_send(
             call.message.chat.id, 
             f"✅ Capital baseline reconfigured to **`${new_bal:,.2f}` USD**", 
-            reply_markup=get_main_dashboard(), 
-            parse_mode="Markdown"
+            reply_markup=get_main_dashboard()
         )
     except Exception as e:
         print(f"Preset balance error: {e}")
@@ -579,7 +597,7 @@ def handle_lot_calculation(call):
         )
 
         bot.answer_callback_query(call.id, text=f"Calculated for {risk_pct}% Risk Matrix")
-        bot.send_message(call.message.chat.id, calc_text, parse_mode="Markdown")
+        safe_send(call.message.chat.id, calc_text)
 
     except Exception as e:
         print(f"Callback Error: {e}")
